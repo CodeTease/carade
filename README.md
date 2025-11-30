@@ -19,6 +19,7 @@ Part of the **CodeTease** Open-Source ecosystem.
 1. **Build**
 You need JDK 11+ (Java 21+ recommended).
 ```bash
+# Get the Carade.java file from "core" folder
 javac Carade.java
 ```
 
