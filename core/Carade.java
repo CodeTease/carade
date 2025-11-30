@@ -145,7 +145,6 @@ public class Carade {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static void loadData() {
         File f = new File(DUMP_FILE);
         if (!f.exists()) return;
