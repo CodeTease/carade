@@ -7,6 +7,9 @@ public class PubSub {
     private final ConcurrentHashMap<String, Set<Subscriber>> channels = new ConcurrentHashMap<>();
     // Pattern -> Set of Subscribers
     private final ConcurrentHashMap<String, Set<Subscriber>> patterns = new ConcurrentHashMap<>();
+    
+    // Pattern string -> Compiled Pattern
+    private final ConcurrentHashMap<String, Pattern> patternCache = new ConcurrentHashMap<>();
 
     public interface Subscriber {
         void send(String channel, String message, String pattern);
@@ -30,18 +33,32 @@ public class PubSub {
     public void unsubscribeAll(Subscriber sub) {
         // This is slow, but acceptable for now
         for (Set<Subscriber> set : channels.values()) set.remove(sub);
-        for (Set<Subscriber> set : patterns.values()) set.remove(sub);
+        for (Map.Entry<String, Set<Subscriber>> entry : patterns.entrySet()) {
+            Set<Subscriber> subs = entry.getValue();
+            subs.remove(sub);
+            if (subs.isEmpty()) {
+                patterns.remove(entry.getKey());
+                patternCache.remove(entry.getKey());
+            }
+        }
     }
 
     public void psubscribe(String pattern, Subscriber sub) {
-        patterns.computeIfAbsent(pattern, k -> ConcurrentHashMap.newKeySet()).add(sub);
+        patterns.computeIfAbsent(pattern, k -> {
+            // Compile and cache pattern when first subscriber appears
+            patternCache.computeIfAbsent(pattern, this::compilePattern);
+            return ConcurrentHashMap.newKeySet();
+        }).add(sub);
     }
 
     public void punsubscribe(String pattern, Subscriber sub) {
         Set<Subscriber> subs = patterns.get(pattern);
         if (subs != null) {
             subs.remove(sub);
-            if (subs.isEmpty()) patterns.remove(pattern);
+            if (subs.isEmpty()) {
+                patterns.remove(pattern);
+                patternCache.remove(pattern);
+            }
         }
     }
 
@@ -72,11 +89,21 @@ public class PubSub {
     
     // Glob-style matching: news.* matches news.sports
     private boolean matches(String pattern, String text) {
-        String regex = pattern
+        Pattern p = patternCache.get(pattern);
+        if (p == null) {
+             // Fallback or lazy load if missing (shouldn't happen if logic is correct)
+             p = compilePattern(pattern);
+             patternCache.put(pattern, p);
+        }
+        return p.matcher(text).matches();
+    }
+    
+    private Pattern compilePattern(String globPattern) {
+        String regex = globPattern
                 .replace(".", "\\.")
                 .replace("*", ".*")
                 .replace("?", ".");
-        return Pattern.matches(regex, text);
+        return Pattern.compile(regex);
     }
     
     public int getChannelCount() { return channels.size(); }

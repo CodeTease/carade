@@ -373,38 +373,178 @@ public class Carade {
         if (removed > 0) System.out.println("🧹 [GC] Vacuumed " + removed + " expired keys.");
     }
 
+    // --- SNAPSHOT FORMAT (RDB-ish) ---
+    // Magic: "CARD" (4 bytes)
+    // Version: 1 (int)
+    // Entry:
+    //   Type: 1 byte (0=STRING, 1=LIST, 2=HASH, 3=SET)
+    //   Expiry: 8 bytes (long)
+    //   Key: String (UTF-8, len prefixed)
+    //   Value: Depends on type
+    
     private static void saveData() {
-        try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(DUMP_FILE))) {
-            oos.writeObject(store);
+        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(DUMP_FILE)))) {
+            dos.writeBytes("CARD");
+            dos.writeInt(1); // Version
+            
+            for (Map.Entry<String, ValueEntry> entry : store.entrySet()) {
+                ValueEntry v = entry.getValue();
+                if (v.isExpired()) continue;
+                
+                // Type
+                int typeCode = 0;
+                if (v.type == DataType.LIST) typeCode = 1;
+                else if (v.type == DataType.HASH) typeCode = 2;
+                else if (v.type == DataType.SET) typeCode = 3;
+                dos.writeByte(typeCode);
+                
+                // Expiry
+                dos.writeLong(v.expireAt);
+                
+                // Key
+                writeString(dos, entry.getKey());
+                
+                // Value
+                switch (v.type) {
+                    case STRING:
+                        writeString(dos, (String) v.value);
+                        break;
+                    case LIST:
+                        ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                        dos.writeInt(list.size());
+                        for (String s : list) writeString(dos, s);
+                        break;
+                    case HASH:
+                        ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                        dos.writeInt(map.size());
+                        for (Map.Entry<String, String> e : map.entrySet()) {
+                            writeString(dos, e.getKey());
+                            writeString(dos, e.getValue());
+                        }
+                        break;
+                    case SET:
+                        Set<String> set = (Set<String>) v.value;
+                        dos.writeInt(set.size());
+                        for (String s : set) writeString(dos, s);
+                        break;
+                }
+            }
+            System.out.println("💾 Snapshot saved.");
         } catch (IOException e) {
             System.err.println("⚠️ Save failed: " + e.getMessage());
         }
+    }
+    
+    private static void writeString(DataOutputStream dos, String s) throws IOException {
+        byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        dos.writeInt(bytes.length);
+        dos.write(bytes);
+    }
+    
+    private static String readString(DataInputStream dis) throws IOException {
+        int len = dis.readInt();
+        byte[] bytes = new byte[len];
+        dis.readFully(bytes);
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static void loadData() {
         File f = new File(DUMP_FILE);
         if (!f.exists()) return;
-        try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(f))) {
+        
+        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(f)))) {
+            // Check Magic
+            byte[] magic = new byte[4];
+            dis.readFully(magic);
+            if (!Arrays.equals(magic, "CARD".getBytes())) {
+                // Fallback to legacy object stream if magic doesn't match?
+                // The legacy format starts with serialization header (AC ED ...).
+                // "CARD" is 43 41 52 44.
+                // If it fails, we can try legacy load or just fail.
+                // But since we are replacing the format, let's try to detect legacy?
+                // For simplicity, let's assume if it doesn't match, we try legacy load.
+                // But we can't rewind easily without PushbackInputStream or re-opening.
+                throw new IOException("Invalid magic header");
+            }
+            
+            int version = dis.readInt();
+            if (version != 1) throw new IOException("Unknown version: " + version);
+            
+            store = new ConcurrentHashMap<>();
+            while (dis.available() > 0) {
+                try {
+                    int typeCode = dis.readByte();
+                    long expireAt = dis.readLong();
+                    String key = readString(dis);
+                    
+                    DataType type = DataType.STRING;
+                    Object value = null;
+                    
+                    if (typeCode == 0) {
+                        type = DataType.STRING;
+                        value = readString(dis);
+                    } else if (typeCode == 1) {
+                        type = DataType.LIST;
+                        int size = dis.readInt();
+                        ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
+                        for (int i=0; i<size; i++) list.add(readString(dis));
+                        value = list;
+                    } else if (typeCode == 2) {
+                        type = DataType.HASH;
+                        int size = dis.readInt();
+                        ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
+                        for (int i=0; i<size; i++) {
+                            String k = readString(dis);
+                            String v = readString(dis);
+                            map.put(k, v);
+                        }
+                        value = map;
+                    } else if (typeCode == 3) {
+                        type = DataType.SET;
+                        int size = dis.readInt();
+                        Set<String> set = ConcurrentHashMap.newKeySet();
+                        for (int i=0; i<size; i++) set.add(readString(dis));
+                        value = set;
+                    }
+                    
+                    ValueEntry ve = new ValueEntry(value, type, -1);
+                    ve.expireAt = expireAt; // Restore expiry
+                    if (!ve.isExpired()) store.put(key, ve);
+                    
+                } catch (EOFException e) { break; }
+            }
+            System.out.println("📂 Loaded " + store.size() + " keys (Snapshot).");
+            
+        } catch (Exception e) {
+            // Try legacy load if magic failed?
+            // "Legacy" load used ObjectInputStream.
+            System.out.println("⚠️ Snapshot load failed (" + e.getMessage() + "). Trying legacy load...");
+            loadLegacyData();
+        }
+    }
+    
+    private static void loadLegacyData() {
+         File f = new File(DUMP_FILE);
+         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(f))) {
             Object loaded = ois.readObject();
             if (loaded instanceof ConcurrentHashMap) {
                 ConcurrentHashMap<?, ?> rawMap = (ConcurrentHashMap<?, ?>) loaded;
                 store = new ConcurrentHashMap<>();
-                int migratedCount = 0;
                 for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
                     String key = (String) entry.getKey();
                     Object val = entry.getValue();
                     if (val instanceof String) {
                         store.put(key, new ValueEntry((String) val, DataType.STRING, -1));
-                        migratedCount++;
                     } else if (val instanceof ValueEntry) {
                         store.put(key, (ValueEntry) val);
                     }
                 }
-                System.out.println("📂 Loaded " + store.size() + " keys.");
-                if (migratedCount > 0) saveData();
+                System.out.println("📂 Loaded " + store.size() + " keys (Legacy).");
+                // Immediately save in new format
+                saveData();
             }
-        } catch (Exception e) {
-            System.out.println("⚠️ Dump file incompatible. Creating new universe.");
+        } catch (Exception ex) {
+            System.out.println("⚠️ Legacy load failed. Starting fresh.");
             store = new ConcurrentHashMap<>();
         }
     }
