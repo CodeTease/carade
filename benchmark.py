@@ -2,7 +2,6 @@ import socket
 import time
 import threading
 import random
-import sys
 import os
 
 # --- CONFIGURATION (Feel free to modify) ---

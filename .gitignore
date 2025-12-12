@@ -25,3 +25,10 @@ replay_pid*
 
 
 *.dump
+*.aof
+
+# Internal
+*.vegh
+.veghcache
+venv
+__pycache__
