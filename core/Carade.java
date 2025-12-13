@@ -1,3 +1,4 @@
+import java.lang.management.ManagementFactory;
 import java.io.*;
 import java.net.*;
 import java.util.*;
@@ -160,43 +161,29 @@ public class Carade {
 
     // --- LOGIC HELPER ---
     // Internal method to execute commands from AOF replay (or other internal sources)
+    private static final AtomicInteger writeCounter = new AtomicInteger(0);
+
     // Eviction Policy (Approximate LRU)
     private static void performEvictionIfNeeded() {
         if (config.maxMemory <= 0) return;
         
-        // Simple heuristic: if we are roughly over memory.
-        // Since we don't track exact memory usage of objects (hard in Java), 
-        // we can rely on heap usage or estimated size. 
-        // "Currently Carade will run until... your RAM cries".
-        // The user wants "Max Memory... LRU".
-        // Accurately tracking size of Java objects is complex. 
-        // Let's assume the user configures maxMemory based on Heap size or we just check Runtime free memory?
-        // Or we count keys? No, maxMemory implies bytes.
-        // Let's use Runtime.getRuntime().totalMemory() - freeMemory() as approximation?
-        // No, that includes overhead.
-        
-        // Strategy: Check if Runtime used memory > config.maxMemory.
-        // If so, evict.
+        // Check only every 50 writes to save CPU
+        if (writeCounter.incrementAndGet() % 50 != 0) return;
         
         long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         if (used < config.maxMemory) return;
         
         System.out.println("🧹 [Eviction] Memory full (" + (used/1024/1024) + "MB > " + (config.maxMemory/1024/1024) + "MB). Evicting...");
         
-        // Evict loop: try to free up some space.
-        // Sample random keys and remove LRU.
+        // Evict loop
         int attempts = 0;
+        Iterator<String> it = store.keySet().iterator();
         while (used > config.maxMemory && !store.isEmpty() && attempts < 100) {
-            // Sampling
-            List<String> keys = new ArrayList<>(store.keySet()); // Expensive copy? keyset view is cheap but toArray is not.
-            // Using iterator to get a few keys?
-            // CHM iterator is weakly consistent.
-            // Let's pick 5 random keys from a partial iteration.
-            
+            // Pick a few random keys from iterator (cheap sampling)
+            // We just iterate forward, which is "random enough" for hash map
             String bestKey = null;
             long oldestTime = Long.MAX_VALUE;
             
-            Iterator<String> it = store.keySet().iterator();
             int samples = 0;
             while (it.hasNext() && samples < 5) {
                 String key = it.next();
@@ -209,21 +196,16 @@ public class Carade {
                 }
                 samples++;
             }
+            // If iterator exhausted, restart
+            if (!it.hasNext()) it = store.keySet().iterator();
             
             if (bestKey != null) {
                 store.remove(bestKey);
-                // Log eviction?
-                // if (aofHandler != null) aofHandler.log("DEL", bestKey); // Maybe? Redis doesn't AOF eviction usually unless it's a delete.
-                // It treats it as cache miss later. But if we want consistent state, we should.
-                // But if we restart, memory is empty, so we reload. If we reload full AOF, we hit memory limit again and evict again.
-                // So logging DEL is good.
                 if (aofHandler != null) aofHandler.log("DEL", bestKey);
             }
             
             used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
             attempts++;
-            // Trigger GC? No, too slow. Just trust JVM will reclaim eventually. 
-            // We just remove references.
         }
     }
 
@@ -778,18 +760,26 @@ public class Carade {
                                     else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                                     else {
                                         ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
-                                        // Snapshot to array for index access (inefficient but safe-ish)
-                                        Object[] arr = list.toArray();
+                                        int size = list.size(); // Approximate size
                                         int start = Integer.parseInt(parts.get(2));
                                         int end = Integer.parseInt(parts.get(3));
-                                        if (start < 0) start += arr.length;
-                                        if (end < 0) end += arr.length;
+                                        
+                                        if (start < 0) start += size;
+                                        if (end < 0) end += size;
                                         if (start < 0) start = 0;
-                                        if (end >= arr.length) end = arr.length - 1;
+                                        // if (end >= size) end = size - 1; // Iterator handles this naturally
                                         
                                         List<String> sub = new ArrayList<>();
                                         if (start <= end) {
-                                            for (int i = start; i <= end; i++) sub.add((String)arr[i]);
+                                            Iterator<String> it = list.iterator();
+                                            int idx = 0;
+                                            while (it.hasNext() && idx <= end) {
+                                                String s = it.next();
+                                                if (idx >= start) {
+                                                    sub.add(s);
+                                                }
+                                                idx++;
+                                            }
                                         }
                                         if (isResp) send(out, true, Resp.array(sub), null);
                                         else {
@@ -1063,11 +1053,40 @@ public class Carade {
                                 }
                                 break;
 
+                            case "INFO":
+                                StringBuilder info = new StringBuilder();
+                                info.append("# Server\n");
+                                info.append("carade_version:0.1.0\n");
+                                info.append("tcp_port:").append(config.port).append("\n");
+                                info.append("uptime_in_seconds:").append(ManagementFactory.getRuntimeMXBean().getUptime() / 1000).append("\n");
+                                info.append("\n# Clients\n");
+                                info.append("connected_clients:").append(activeConnections.get()).append("\n");
+                                info.append("\n# Memory\n");
+                                info.append("used_memory:").append(Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()).append("\n");
+                                info.append("maxmemory:").append(config.maxMemory).append("\n");
+                                info.append("\n# Stats\n");
+                                info.append("total_commands_processed:").append(totalCommands.get()).append("\n");
+                                info.append("keyspace_hits:0\n"); // Todo
+                                info.append("keyspace_misses:0\n"); // Todo
+                                info.append("\n# Persistence\n");
+                                info.append("aof_enabled:1\n");
+                                
+                                if (isResp) send(out, true, Resp.bulkString(info.toString()), null);
+                                else send(out, false, null, info.toString());
+                                break;
                             case "DBSIZE": send(out, isResp, Resp.integer(store.size()), "(integer) " + store.size()); break;
                             case "FLUSHALL": 
                                 store.clear(); 
                                 aofHandler.log("FLUSHALL");
                                 send(out, isResp, Resp.simpleString("OK"), "OK"); 
+                                break;
+                            case "BGREWRITEAOF":
+                                // Execute in background
+                                CompletableFuture.runAsync(() -> {
+                                    System.out.println("🔄 Starting Background AOF Rewrite...");
+                                    aofHandler.rewrite(store);
+                                });
+                                send(out, isResp, Resp.simpleString("Background append only file rewriting started"), "Background append only file rewriting started");
                                 break;
                             case "PING": send(out, isResp, Resp.simpleString("PONG"), "PONG"); break;
                             case "QUIT": socket.close(); return;

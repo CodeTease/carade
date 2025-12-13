@@ -8,6 +8,11 @@ public class PubSub {
     // Pattern -> Set of Subscribers
     private final ConcurrentHashMap<String, Set<Subscriber>> patterns = new ConcurrentHashMap<>();
     
+    // Subscriber -> Set of Channels (Reverse Index)
+    private final ConcurrentHashMap<Subscriber, Set<String>> subToChannels = new ConcurrentHashMap<>();
+    // Subscriber -> Set of Patterns (Reverse Index)
+    private final ConcurrentHashMap<Subscriber, Set<String>> subToPatterns = new ConcurrentHashMap<>();
+
     // Pattern string -> Compiled Pattern
     private final ConcurrentHashMap<String, Pattern> patternCache = new ConcurrentHashMap<>();
 
@@ -20,6 +25,7 @@ public class PubSub {
 
     public void subscribe(String channel, Subscriber sub) {
         channels.computeIfAbsent(channel, k -> ConcurrentHashMap.newKeySet()).add(sub);
+        subToChannels.computeIfAbsent(sub, k -> ConcurrentHashMap.newKeySet()).add(channel);
     }
 
     public void unsubscribe(String channel, Subscriber sub) {
@@ -28,17 +34,38 @@ public class PubSub {
             subs.remove(sub);
             if (subs.isEmpty()) channels.remove(channel);
         }
+        
+        Set<String> userChannels = subToChannels.get(sub);
+        if (userChannels != null) {
+            userChannels.remove(channel);
+            if (userChannels.isEmpty()) subToChannels.remove(sub);
+        }
     }
     
     public void unsubscribeAll(Subscriber sub) {
-        // This is slow, but acceptable for now
-        for (Set<Subscriber> set : channels.values()) set.remove(sub);
-        for (Map.Entry<String, Set<Subscriber>> entry : patterns.entrySet()) {
-            Set<Subscriber> subs = entry.getValue();
-            subs.remove(sub);
-            if (subs.isEmpty()) {
-                patterns.remove(entry.getKey());
-                patternCache.remove(entry.getKey());
+        // Fast Unsubscribe using Reverse Index
+        Set<String> userChannels = subToChannels.remove(sub);
+        if (userChannels != null) {
+            for (String channel : userChannels) {
+                Set<Subscriber> subs = channels.get(channel);
+                if (subs != null) {
+                    subs.remove(sub);
+                    if (subs.isEmpty()) channels.remove(channel);
+                }
+            }
+        }
+        
+        Set<String> userPatterns = subToPatterns.remove(sub);
+        if (userPatterns != null) {
+            for (String pattern : userPatterns) {
+                Set<Subscriber> subs = patterns.get(pattern);
+                if (subs != null) {
+                    subs.remove(sub);
+                    if (subs.isEmpty()) {
+                        patterns.remove(pattern);
+                        patternCache.remove(pattern);
+                    }
+                }
             }
         }
     }
@@ -49,6 +76,7 @@ public class PubSub {
             patternCache.computeIfAbsent(pattern, this::compilePattern);
             return ConcurrentHashMap.newKeySet();
         }).add(sub);
+        subToPatterns.computeIfAbsent(sub, k -> ConcurrentHashMap.newKeySet()).add(pattern);
     }
 
     public void punsubscribe(String pattern, Subscriber sub) {
@@ -59,6 +87,12 @@ public class PubSub {
                 patterns.remove(pattern);
                 patternCache.remove(pattern);
             }
+        }
+        
+        Set<String> userPatterns = subToPatterns.get(sub);
+        if (userPatterns != null) {
+            userPatterns.remove(pattern);
+            if (userPatterns.isEmpty()) subToPatterns.remove(sub);
         }
     }
 
