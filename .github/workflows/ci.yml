@@ -1,4 +1,4 @@
-name: Carade CI 🥕
+name: Carade Docker CI 🥕
 on:
   push:
     branches:
@@ -22,11 +22,20 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
       
-      - name: Compile
-        run: javac core/*.java
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-      - name: Run Carade
-        run: java -cp core Carade
+      - name: Build Carade Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          builder: buildx-stable
+          load: true
+      
+      - name: Run Carade container
+        run: |
+          docker run -d --name carade-container -p 8080:8080 carade:latest
 
   test:
     name: Run tests
@@ -55,6 +64,6 @@ jobs:
 
       - name: Clean up
         run: |
-          rm -rf ./core/*.class
           rm -rf ./__pycache__
-          rm -rf *.aof *.dump
+          docker rm -f carade-container
+          docker rmi carade:latest
