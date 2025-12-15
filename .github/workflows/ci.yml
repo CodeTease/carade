@@ -30,7 +30,6 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          builder: buildx-stable
           load: true
       
       - name: Run Carade container
