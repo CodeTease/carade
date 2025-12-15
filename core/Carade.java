@@ -25,7 +25,48 @@ public class Carade {
     private static final AtomicInteger activeConnections = new AtomicInteger(0);
 
     // --- STORAGE ENGINE ---
-    enum DataType { STRING, LIST, HASH, SET }
+    enum DataType { STRING, LIST, HASH, SET, ZSET }
+
+    static class ZNode implements Comparable<ZNode> {
+        double score;
+        String member;
+        ZNode(double score, String member) { this.score = score; this.member = member; }
+        @Override public int compareTo(ZNode o) {
+            int c = Double.compare(this.score, o.score);
+            return c != 0 ? c : this.member.compareTo(o.member);
+        }
+        @Override public boolean equals(Object o) {
+            if (o instanceof ZNode) {
+                ZNode z = (ZNode)o;
+                return score == z.score && member.equals(z.member);
+            }
+            return false;
+        }
+        @Override public int hashCode() { return Objects.hash(score, member); }
+    }
+
+    static class CaradeZSet {
+         final ConcurrentHashMap<String, Double> scores = new ConcurrentHashMap<>();
+         final ConcurrentSkipListSet<ZNode> sorted = new ConcurrentSkipListSet<>();
+         
+         int add(double score, String member) {
+             Double oldScore = scores.get(member);
+             if (oldScore != null) {
+                 if (oldScore == score) return 0;
+                 sorted.remove(new ZNode(oldScore, member));
+                 scores.put(member, score);
+                 sorted.add(new ZNode(score, member));
+                 return 0; // Updated
+             }
+             scores.put(member, score);
+             sorted.add(new ZNode(score, member));
+             return 1; // New
+         }
+         
+         Double score(String member) { return scores.get(member); }
+         
+         int size() { return scores.size(); }
+    }
 
     static class ValueEntry implements Serializable {
         private static final long serialVersionUID = 2L;
@@ -298,6 +339,44 @@ public class Carade {
                         });
                     }
                     break;
+                case "ZADD":
+                    if (parts.size() >= 4) {
+                        String key = parts.get(1);
+                        try {
+                             store.compute(key, (k, v) -> {
+                                 CaradeZSet zset;
+                                 if (v == null) {
+                                     zset = new CaradeZSet();
+                                     v = new ValueEntry(zset, DataType.ZSET, -1);
+                                 } else if (v.type == DataType.ZSET) {
+                                     zset = (CaradeZSet)v.value;
+                                 } else {
+                                     return v;
+                                 }
+                                 
+                                 for (int i = 2; i < parts.size(); i += 2) {
+                                     try {
+                                         double score = Double.parseDouble(parts.get(i));
+                                         String member = parts.get(i+1);
+                                         zset.add(score, member);
+                                     } catch (Exception ex) {}
+                                 }
+                                 return v;
+                             });
+                        } catch (Exception e) {}
+                    }
+                    break;
+                case "MSET":
+                    if (parts.size() >= 3) {
+                        for (int i = 1; i < parts.size(); i += 2) {
+                            if (i + 1 < parts.size()) {
+                                String key = parts.get(i);
+                                String val = parts.get(i+1);
+                                store.put(key, new ValueEntry(val, DataType.STRING, -1));
+                            }
+                        }
+                    }
+                    break;
                 // Add new types to internal executor
                 case "LPUSH":
                 case "RPUSH":
@@ -455,6 +534,7 @@ public class Carade {
                 if (v.type == DataType.LIST) typeCode = 1;
                 else if (v.type == DataType.HASH) typeCode = 2;
                 else if (v.type == DataType.SET) typeCode = 3;
+                else if (v.type == DataType.ZSET) typeCode = 4;
                 dos.writeByte(typeCode);
                 
                 // Expiry
@@ -485,6 +565,14 @@ public class Carade {
                         Set<String> set = (Set<String>) v.value;
                         dos.writeInt(set.size());
                         for (String s : set) writeString(dos, s);
+                        break;
+                    case ZSET:
+                        CaradeZSet zset = (CaradeZSet) v.value;
+                        dos.writeInt(zset.size());
+                        for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
+                            writeString(dos, e.getKey());
+                            dos.writeDouble(e.getValue());
+                        }
                         break;
                 }
             }
@@ -564,6 +652,16 @@ public class Carade {
                         Set<String> set = ConcurrentHashMap.newKeySet();
                         for (int i=0; i<size; i++) set.add(readString(dis));
                         value = set;
+                    } else if (typeCode == 4) {
+                        type = DataType.ZSET;
+                        int size = dis.readInt();
+                        CaradeZSet zset = new CaradeZSet();
+                        for (int i=0; i<size; i++) {
+                            String member = readString(dis);
+                            double score = dis.readDouble();
+                            zset.add(score, member);
+                        }
+                        value = zset;
                     }
                     
                     ValueEntry ve = new ValueEntry(value, type, -1);
@@ -752,6 +850,26 @@ public class Carade {
                                 }
                                 break;
 
+                            case "MSET":
+                                if (parts.size() < 3 || (parts.size() - 1) % 2 != 0) {
+                                    send(out, isResp, Resp.error("wrong number of arguments for 'mset' command"), "(error) wrong number of arguments for 'mset' command");
+                                } else {
+                                    performEvictionIfNeeded();
+                                    for (int i = 1; i < parts.size(); i += 2) {
+                                        String key = parts.get(i);
+                                        String val = parts.get(i + 1);
+                                        store.put(key, new ValueEntry(val, DataType.STRING, -1));
+                                    }
+                                    // Log MSET command as is
+                                    if (aofHandler != null) {
+                                        String[] logArgs = new String[parts.size() - 1];
+                                        for(int i=1; i<parts.size(); i++) logArgs[i-1] = parts.get(i);
+                                        aofHandler.log("MSET", logArgs);
+                                    }
+                                    send(out, isResp, Resp.simpleString("OK"), "OK");
+                                }
+                                break;
+
                             case "GET":
                                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: GET key"), "(error) usage: GET key");
                                 else {
@@ -766,6 +884,39 @@ public class Carade {
                                             String v = (String) entry.value;
                                             send(out, isResp, Resp.bulkString(v), v.contains(" ") ? "\"" + v + "\"" : v);
                                         }
+                                    }
+                                }
+                                break;
+
+                            case "MGET":
+                                if (parts.size() < 2) {
+                                    send(out, isResp, Resp.error("wrong number of arguments for 'mget' command"), "(error) wrong number of arguments for 'mget' command");
+                                } else {
+                                    List<String> results = new ArrayList<>();
+                                    for (int i = 1; i < parts.size(); i++) {
+                                        String key = parts.get(i);
+                                        ValueEntry entry = store.get(key);
+                                        if (entry == null) {
+                                            results.add(null);
+                                        } else if (entry.isExpired()) {
+                                            store.remove(key);
+                                            results.add(null);
+                                        } else if (entry.type != DataType.STRING) {
+                                            results.add(null);
+                                        } else {
+                                            entry.touch();
+                                            results.add((String) entry.value);
+                                        }
+                                    }
+                                    if (isResp) {
+                                        send(out, true, Resp.array(results), null);
+                                    } else {
+                                        StringBuilder sb = new StringBuilder();
+                                        for (int i = 0; i < results.size(); i++) {
+                                            String val = results.get(i);
+                                            sb.append((i+1) + ") " + (val == null ? "(nil)" : "\"" + val + "\"") + "\n");
+                                        }
+                                        send(out, false, null, sb.toString().trim());
                                     }
                                 }
                                 break;
@@ -1206,6 +1357,151 @@ public class Carade {
                                 }
                                 break;
                             
+                            // --- SORTED SETS ---
+                            case "ZADD":
+                                if (parts.size() < 4 || (parts.size() - 2) % 2 != 0) {
+                                     send(out, isResp, Resp.error("usage: ZADD key score member [score member ...]"), "(error) usage: ZADD key score member ...");
+                                } else {
+                                     performEvictionIfNeeded();
+                                     String key = parts.get(1);
+                                     final int[] addedCount = {0};
+                                     try {
+                                         store.compute(key, (k, v) -> {
+                                             CaradeZSet zset;
+                                             if (v == null) {
+                                                 zset = new CaradeZSet();
+                                                 v = new ValueEntry(zset, DataType.ZSET, -1);
+                                             } else if (v.type != DataType.ZSET) {
+                                                 throw new RuntimeException("WRONGTYPE");
+                                             } else {
+                                                 zset = (CaradeZSet) v.value;
+                                             }
+                                             
+                                             for (int i = 2; i < parts.size(); i += 2) {
+                                                 try {
+                                                     double score = Double.parseDouble(parts.get(i));
+                                                     String member = parts.get(i+1);
+                                                     addedCount[0] += zset.add(score, member);
+                                                     // Log each pair? Or log bulk?
+                                                     // AOF logging is outside compute usually, but we need correct args.
+                                                 } catch (NumberFormatException e) {
+                                                     throw new RuntimeException("ERR value is not a valid float");
+                                                 }
+                                             }
+                                             v.touch();
+                                             return v;
+                                         });
+                                         
+                                         // Log ZADD
+                                         // parts: ZADD, key, score, member, ...
+                                         // Log as is
+                                         String[] logArgs = parts.toArray(new String[0]);
+                                         // But aofHandler.log takes (cmd, args...)
+                                         // So pass array starting from index 1?
+                                         // Actually aofHandler.log(cmd, args...)
+                                         String[] args = new String[parts.size()-1];
+                                         for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
+                                         aofHandler.log("ZADD", args);
+                                         
+                                         send(out, isResp, Resp.integer(addedCount[0]), "(integer) " + addedCount[0]);
+                                     } catch (RuntimeException e) {
+                                         String msg = e.getMessage();
+                                         if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
+                                             send(out, isResp, Resp.error(msg), "(error) " + msg);
+                                         else throw e;
+                                     }
+                                }
+                                break;
+                                
+                            case "ZRANGE":
+                                if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZRANGE key start stop [WITHSCORES]"), "(error) usage: ZRANGE key start stop [WITHSCORES]");
+                                else {
+                                    String key = parts.get(1);
+                                    boolean withScores = parts.size() > 4 && parts.get(parts.size()-1).equalsIgnoreCase("WITHSCORES");
+                                    
+                                    ValueEntry entry = store.get(key);
+                                    if (entry == null || entry.type != DataType.ZSET) {
+                                        if (entry != null && entry.type != DataType.ZSET) {
+                                            send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                                        } else {
+                                            send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
+                                        }
+                                    } else {
+                                        try {
+                                            int start = Integer.parseInt(parts.get(2));
+                                            int end = Integer.parseInt(parts.get(3));
+                                            CaradeZSet zset = (CaradeZSet) entry.value;
+                                            int size = zset.size();
+                                            
+                                            if (start < 0) start += size;
+                                            if (end < 0) end += size;
+                                            if (start < 0) start = 0;
+                                            // if (end >= size) end = size - 1; // handled by loop
+                                            
+                                            List<String> result = new ArrayList<>();
+                                            if (start <= end) {
+                                                Iterator<ZNode> it = zset.sorted.iterator();
+                                                int idx = 0;
+                                                while (it.hasNext() && idx <= end) {
+                                                    ZNode node = it.next();
+                                                    if (idx >= start) {
+                                                        result.add(node.member);
+                                                        if (withScores) {
+                                                            // Format double to string, remove trailing .0 if integer?
+                                                            // Redis standard behavior varies, usually just string rep.
+                                                            // Java Double.toString() is fine.
+                                                            String s = String.valueOf(node.score);
+                                                            if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
+                                                            result.add(s);
+                                                        }
+                                                    }
+                                                    idx++;
+                                                }
+                                            }
+                                            
+                                            if (isResp) send(out, true, Resp.array(result), null);
+                                            else {
+                                                 StringBuilder sb = new StringBuilder();
+                                                 for (int i = 0; i < result.size(); i++) {
+                                                     sb.append((i+1) + ") \"" + result.get(i) + "\"\n");
+                                                 }
+                                                 send(out, false, null, sb.toString().trim());
+                                            }
+                                            
+                                        } catch (NumberFormatException e) {
+                                            send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
+                                        }
+                                    }
+                                }
+                                break;
+                                
+                            case "ZRANK":
+                                if (parts.size() < 3) send(out, isResp, Resp.error("usage: ZRANK key member"), "(error) usage: ZRANK key member");
+                                else {
+                                    String key = parts.get(1);
+                                    String member = parts.get(2);
+                                    ValueEntry entry = store.get(key);
+                                    if (entry == null || entry.type != DataType.ZSET) {
+                                         if (entry != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                                         else send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    } else {
+                                        CaradeZSet zset = (CaradeZSet) entry.value;
+                                        Double score = zset.score(member);
+                                        if (score == null) {
+                                            send(out, isResp, Resp.bulkString(null), "(nil)");
+                                        } else {
+                                            // O(N) scan
+                                            int rank = 0;
+                                            for (ZNode node : zset.sorted) {
+                                                if (node.member.equals(member)) break;
+                                                rank++;
+                                            }
+                                            send(out, isResp, Resp.integer(rank), "(integer) " + rank);
+                                        }
+                                    }
+                                }
+                                break;
+
                             // --- NEW PUB/SUB COMMANDS ---
                             case "SUBSCRIBE":
                                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: SUBSCRIBE channel"), "(error) usage: SUBSCRIBE channel");

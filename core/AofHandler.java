@@ -83,6 +83,13 @@ public class AofHandler {
                     for (String s : set) {
                         tempWriter.print(Resp.array(Arrays.asList("SADD", key, s)));
                     }
+                } else if (val.type == Carade.DataType.ZSET) {
+                    Carade.CaradeZSet zset = (Carade.CaradeZSet) val.value;
+                    // ZADD key score member
+                    // We can batch, but for simplicity one by one is fine for rewrite
+                    for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
+                        tempWriter.print(Resp.array(Arrays.asList("ZADD", key, String.valueOf(e.getValue()), e.getKey())));
+                    }
                 }
             }
             tempWriter.flush();
