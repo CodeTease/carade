@@ -60,9 +60,9 @@ docker run -d \
   carade
 ```
 
-Or pull from GitHub Container Registry (if available):
+Or pull from GitHub Container Registry:
 ```bash
-docker run -d -p 63790:63790 ghcr.io/OWNER/carade:latest
+docker run -d -p 63790:63790 ghcr.io/codetease/carade:latest
 ```
 
 ## Configuration (`carade.conf`)
