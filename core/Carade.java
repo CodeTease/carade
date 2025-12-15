@@ -55,6 +55,49 @@ public class Carade {
     private static ConcurrentHashMap<String, ValueEntry> store = new ConcurrentHashMap<>();
     private static AofHandler aofHandler;
 
+    // --- BLOCKING QUEUES ---
+    static class BlockingRequest {
+        final CompletableFuture<List<String>> future = new CompletableFuture<>();
+        final boolean isLeft;
+        BlockingRequest(boolean isLeft) { this.isLeft = isLeft; }
+    }
+    private static final ConcurrentHashMap<String, ConcurrentLinkedQueue<BlockingRequest>> blockingRegistry = new ConcurrentHashMap<>();
+
+    private static void checkBlockers(String key) {
+        ConcurrentLinkedQueue<BlockingRequest> q = blockingRegistry.get(key);
+        if (q == null) return;
+        
+        synchronized (q) {
+            while (!q.isEmpty()) {
+                ValueEntry v = store.get(key);
+                if (v == null || v.type != DataType.LIST) return;
+                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                if (list.isEmpty()) return;
+                
+                BlockingRequest req = q.peek();
+                if (req.future.isDone()) {
+                    q.poll(); 
+                    continue;
+                }
+                
+                String val = req.isLeft ? list.pollFirst() : list.pollLast();
+                
+                if (val != null) {
+                    q.poll(); 
+                    boolean completed = req.future.complete(Arrays.asList(key, val));
+                    if (!completed) {
+                        if (req.isLeft) list.addFirst(val); else list.addLast(val); // Revert
+                        continue;
+                    }
+                    if (aofHandler != null) aofHandler.log(req.isLeft ? "LPOP" : "RPOP", key);
+                    if (list.isEmpty()) store.remove(key);
+                } else {
+                    return;
+                }
+            }
+        }
+    }
+
     // --- PUB/SUB ENGINE (NEW!) ---
     private static PubSub pubSub = new PubSub();
 
@@ -326,6 +369,40 @@ public class Carade {
                     break;
                 case "FLUSHALL":
                     store.clear();
+                    break;
+                case "INCR":
+                case "DECR":
+                    if (parts.size() >= 2) {
+                        String key = parts.get(1);
+                        store.compute(key, (k, v) -> {
+                            long val = 0;
+                            if (v == null) {
+                                val = 0;
+                            } else if (v.type == DataType.STRING) {
+                                try {
+                                    val = Long.parseLong((String)v.value);
+                                } catch (Exception e) { return v; } 
+                            } else {
+                                return v;
+                            }
+                            if (cmd.equals("INCR")) val++; else val--;
+                            ValueEntry newV = new ValueEntry(String.valueOf(val), DataType.STRING, -1);
+                            if (v != null) newV.expireAt = v.expireAt;
+                            return newV;
+                        });
+                    }
+                    break;
+                case "EXPIRE":
+                    if (parts.size() >= 3) {
+                         String key = parts.get(1);
+                         try {
+                             long seconds = Long.parseLong(parts.get(2));
+                             store.computeIfPresent(key, (k, v) -> {
+                                 v.expireAt = System.currentTimeMillis() + (seconds * 1000);
+                                 return v;
+                             });
+                         } catch (Exception e) {}
+                    }
                     break;
                 // Add other state-changing commands here as we implement them
             }
@@ -692,6 +769,109 @@ public class Carade {
                                     }
                                 }
                                 break;
+
+                            case "TTL":
+                                if (parts.size() < 2) send(out, isResp, Resp.error("usage: TTL key"), "(error) usage: TTL key");
+                                else {
+                                    String key = parts.get(1);
+                                    ValueEntry entry = store.get(key);
+                                    if (entry == null) send(out, isResp, Resp.integer(-2), "(integer) -2");
+                                    else if (entry.expireAt == -1) send(out, isResp, Resp.integer(-1), "(integer) -1");
+                                    else {
+                                        long ttl = (entry.expireAt - System.currentTimeMillis()) / 1000;
+                                        if (ttl < 0) {
+                                            store.remove(key);
+                                            send(out, isResp, Resp.integer(-2), "(integer) -2");
+                                        } else {
+                                            send(out, isResp, Resp.integer(ttl), "(integer) " + ttl);
+                                        }
+                                    }
+                                }
+                                break;
+
+                            case "EXPIRE":
+                                if (parts.size() < 3) send(out, isResp, Resp.error("usage: EXPIRE key seconds"), "(error) usage: EXPIRE key seconds");
+                                else {
+                                    String key = parts.get(1);
+                                    try {
+                                        long seconds = Long.parseLong(parts.get(2));
+                                        final int[] ret = {0};
+                                        store.computeIfPresent(key, (k, v) -> {
+                                            v.expireAt = System.currentTimeMillis() + (seconds * 1000);
+                                            ret[0] = 1;
+                                            return v;
+                                        });
+                                        if (ret[0] == 1) aofHandler.log("EXPIRE", key, String.valueOf(seconds));
+                                        send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
+                                    } catch (NumberFormatException e) {
+                                        send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
+                                    }
+                                }
+                                break;
+
+                            case "KEYS":
+                                if (parts.size() < 2) send(out, isResp, Resp.error("usage: KEYS pattern"), "(error) usage: KEYS pattern");
+                                else {
+                                    String pattern = parts.get(1);
+                                    List<String> keys = new ArrayList<>();
+                                    if (pattern.equals("*")) {
+                                        keys.addAll(store.keySet());
+                                    } else {
+                                        String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+                                        java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);
+                                        for (String k : store.keySet()) {
+                                            if (p.matcher(k).matches()) keys.add(k);
+                                        }
+                                    }
+                                    if (isResp) send(out, true, Resp.array(keys), null);
+                                    else {
+                                        StringBuilder sb = new StringBuilder();
+                                        for (int i = 0; i < keys.size(); i++) sb.append((i+1) + ") \"" + keys.get(i) + "\"\n");
+                                        send(out, false, null, sb.toString().trim());
+                                    }
+                                }
+                                break;
+
+                            case "INCR":
+                            case "DECR":
+                                if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
+                                else {
+                                    performEvictionIfNeeded();
+                                    String key = parts.get(1);
+                                    final long[] ret = {0};
+                                    try {
+                                        store.compute(key, (k, v) -> {
+                                            long val = 0;
+                                            if (v == null) {
+                                                val = 0;
+                                            } else if (v.type != DataType.STRING) {
+                                                throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                                            } else {
+                                                try {
+                                                    val = Long.parseLong((String)v.value);
+                                                } catch (NumberFormatException e) {
+                                                    throw new RuntimeException("ERR value is not an integer or out of range");
+                                                }
+                                            }
+                                            
+                                            if (cmd.equals("INCR")) val++; else val--;
+                                            ret[0] = val;
+                                            
+                                            ValueEntry newV = new ValueEntry(String.valueOf(val), DataType.STRING, -1);
+                                            if (v != null) newV.expireAt = v.expireAt;
+                                            newV.touch();
+                                            return newV;
+                                        });
+                                        aofHandler.log(cmd, key);
+                                        send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
+                                    } catch (RuntimeException e) {
+                                        String msg = e.getMessage();
+                                        if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
+                                            send(out, isResp, Resp.error(msg), "(error) " + msg);
+                                        else throw e;
+                                    }
+                                }
+                                break;
                             
                             // --- LISTS ---
                             case "LPUSH":
@@ -717,11 +897,66 @@ public class Carade {
                                             }
                                         });
                                         aofHandler.log(cmd, key, val);
+                                        checkBlockers(key); // Notify waiters
                                         ValueEntry v = store.get(key);
-                                        int size = ((List)v.value).size();
+                                        int size = (v != null && v.value instanceof List) ? ((List)v.value).size() : 0;
                                         send(out, isResp, Resp.integer(size), "(integer) " + size);
                                     } catch (RuntimeException e) {
                                         send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                                    }
+                                }
+                                break;
+                            
+                            case "BLPOP":
+                            case "BRPOP":
+                                if (parts.size() < 3) send(out, isResp, Resp.error("usage: "+cmd+" key [key ...] timeout"), "(error) usage: "+cmd+" key [key ...] timeout");
+                                else {
+                                    try {
+                                        double timeout = Double.parseDouble(parts.get(parts.size()-1));
+                                        List<String> keys = parts.subList(1, parts.size()-1);
+                                        
+                                        boolean served = false;
+                                        for (String k : keys) {
+                                            ValueEntry entry = store.get(k);
+                                            if (entry != null && entry.type == DataType.LIST) {
+                                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
+                                                if (!list.isEmpty()) {
+                                                    String val = cmd.equals("BLPOP") ? list.pollFirst() : list.pollLast();
+                                                    if (val != null) {
+                                                        aofHandler.log(cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
+                                                        if (list.isEmpty()) store.remove(k);
+                                                        send(out, isResp, Resp.array(Arrays.asList(k, val)), null);
+                                                        served = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        if (!served) {
+                                            BlockingRequest bReq = new BlockingRequest(cmd.equals("BLPOP"));
+                                            for (String k : keys) {
+                                                blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
+                                            }
+                                            
+                                            try {
+                                                List<String> result;
+                                                if (timeout <= 0) {
+                                                    result = bReq.future.get(); 
+                                                } else {
+                                                     result = bReq.future.get((long)(timeout * 1000), TimeUnit.MILLISECONDS);
+                                                }
+                                                send(out, isResp, Resp.array(result), null);
+                                            } catch (TimeoutException e) {
+                                                bReq.future.cancel(true);
+                                                send(out, isResp, Resp.bulkString(null), "(nil)");
+                                            } catch (Exception e) {
+                                                bReq.future.cancel(true);
+                                                send(out, isResp, Resp.bulkString(null), "(nil)");
+                                            }
+                                        }
+                                    } catch (NumberFormatException e) {
+                                        send(out, isResp, Resp.error("ERR timeout is not a float or out of range"), "(error) ERR timeout is not a float or out of range");
                                     }
                                 }
                                 break;

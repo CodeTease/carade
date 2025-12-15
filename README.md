@@ -11,8 +11,8 @@ Part of the **CodeTease** Open-Source ecosystem.
 * **Virtual Threads (Java 21+):** Handles millions of concurrent connections effortlessly.
 * **RESP Support:** Fully compatible with standard Redis clients (`redis-cli`, `redis-py`, etc.).
 * **Advanced Data Structures:**
-    * **String:** Standard Key-Value.
-    * **List:** `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`.
+    * **String:** Standard Key-Value with `INCR`/`DECR` support.
+    * **List:** `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, and blocking `BLPOP`/`BRPOP`.
     * **Hash:** `HSET`, `HGET`, `HGETALL`, `HDEL`.
     * **Set:** `SADD`, `SMEMBERS`, `SREM`.
 * **Persistence (AOF):** Append-Only File logging ensures data survives restarts. Replays commands on startup.
@@ -44,6 +44,27 @@ java -cp core Carade
 
 The server listens on port **63790** (default).
 
+## Docker Support 🐳
+
+You can also run Carade using Docker:
+
+```bash
+# Build locally
+docker build -t carade .
+
+# Run container (Persist data to ./data directory)
+docker run -d \
+  -p 63790:63790 \
+  -v $(pwd)/data:/data \
+  --name carade-server \
+  carade
+```
+
+Or pull from GitHub Container Registry (if available):
+```bash
+docker run -d -p 63790:63790 ghcr.io/OWNER/carade:latest
+```
+
 ## Configuration (`carade.conf`)
 
 Create a `carade.conf` file to configure the server:
@@ -67,7 +88,11 @@ Connect via `redis-cli -p 63790` or `telnet`.
 * `SET key value [EX seconds]`
 * `GET key`
 * `DEL key`
+* `INCR key` / `DECR key`
+* `TTL key` / `EXPIRE key seconds`
+* `KEYS pattern`
 * `LPUSH key value` / `RPOP key`
+* `BLPOP key timeout` / `BRPOP key timeout`
 * `HSET key field value` / `HGETALL key`
 * `SADD key member` / `SMEMBERS key`
 
