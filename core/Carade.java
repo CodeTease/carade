@@ -98,6 +98,18 @@ public class Carade {
     private static final ReentrantReadWriteLock globalRWLock = new ReentrantReadWriteLock();
     private static AofHandler aofHandler;
 
+    // --- WATCH / TRANSACTIONS ---
+    private static final ConcurrentHashMap<String, Set<ClientHandler>> watchers = new ConcurrentHashMap<>();
+
+    static void notifyWatchers(String key) {
+        Set<ClientHandler> interested = watchers.get(key);
+        if (interested != null) {
+            for (ClientHandler client : interested) {
+                client.markDirty();
+            }
+        }
+    }
+
     // --- BLOCKING QUEUES ---
     static class BlockingRequest {
         final CompletableFuture<List<String>> future = new CompletableFuture<>();
@@ -752,9 +764,26 @@ public class Carade {
         
         // Transaction State
         private boolean isInTransaction = false;
+        private volatile boolean transactionDirty = false;
+        private Set<String> watching = new HashSet<>();
         private List<List<String>> transactionQueue = new ArrayList<>();
 
         public ClientHandler(Socket socket) { this.socket = socket; }
+
+        public void markDirty() {
+            this.transactionDirty = true;
+        }
+
+        private void unwatchAll() {
+            if (watching.isEmpty()) return;
+            for (String key : watching) {
+                watchers.computeIfPresent(key, (k, list) -> {
+                    list.remove(this);
+                    return list.isEmpty() ? null : list;
+                });
+            }
+            watching.clear();
+        }
 
         private synchronized void send(OutputStream out, boolean isResp, String respData, String textData) {
             try {
@@ -877,6 +906,8 @@ public class Carade {
                             } else {
                                 isInTransaction = false;
                                 transactionQueue.clear();
+                                unwatchAll(); // WATCH state is cleared on DISCARD
+                                transactionDirty = false;
                                 send(out, isResp, Resp.simpleString("OK"), "OK");
                             }
                             continue;
@@ -885,6 +916,18 @@ public class Carade {
                                 send(out, isResp, Resp.error("ERR EXEC without MULTI"), "(error) ERR EXEC without MULTI");
                             } else {
                                 isInTransaction = false;
+                                
+                                if (transactionDirty) {
+                                    send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    transactionQueue.clear();
+                                    transactionDirty = false;
+                                    unwatchAll();
+                                    continue;
+                                }
+
+                                unwatchAll(); // EXEC unwatch all keys
+                                transactionDirty = false;
+                                
                                 if (transactionQueue.isEmpty()) {
                                     send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                                 } else {
@@ -906,6 +949,27 @@ public class Carade {
                                     }
                                 }
                             }
+                            continue;
+                        } else if (cmd.equals("WATCH")) {
+                            if (isInTransaction) {
+                                send(out, isResp, Resp.error("ERR WATCH inside MULTI is not allowed"), "(error) ERR WATCH inside MULTI is not allowed");
+                            } else {
+                                if (parts.size() < 2) {
+                                    send(out, isResp, Resp.error("usage: WATCH key [key ...]"), "(error) usage: WATCH key [key ...]");
+                                } else {
+                                    for (int i = 1; i < parts.size(); i++) {
+                                        String key = parts.get(i);
+                                        watching.add(key);
+                                        watchers.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(this);
+                                    }
+                                    send(out, isResp, Resp.simpleString("OK"), "OK");
+                                }
+                            }
+                            continue;
+                        } else if (cmd.equals("UNWATCH")) {
+                            unwatchAll();
+                            transactionDirty = false;
+                            send(out, isResp, Resp.simpleString("OK"), "OK");
                             continue;
                         }
 
@@ -944,6 +1008,7 @@ public class Carade {
             } finally {
                 // Cleanup Pub/Sub
                 pubSub.unsubscribeAll(this);
+                unwatchAll();
                 activeConnections.decrementAndGet();
             }
         }
@@ -951,6 +1016,10 @@ public class Carade {
         // Extracted command execution logic
         private void executeCommand(List<String> parts, OutputStream out, boolean isResp) throws IOException {
             String cmd = parts.get(0).toUpperCase();
+            // Notify watchers for modification commands
+            // We do this by checking if the command modifies data and calling notifyWatchers(key)
+            // Ideally we do this inside each case block to be precise about WHICH key changed.
+            
             switch (cmd) {
                 case "AUTH":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: AUTH [user] password"), "(error) usage: AUTH [user] password");
@@ -1016,6 +1085,8 @@ public class Carade {
                             send(out, isResp, Resp.error("ERR no such key"), "(error) ERR no such key");
                         } else {
                             store.put(newKey, val);
+                            notifyWatchers(oldKey);
+                            notifyWatchers(newKey);
                             aofHandler.log("RENAME", oldKey, newKey);
                             send(out, isResp, Resp.simpleString("OK"), "OK");
                         }
@@ -1033,6 +1104,7 @@ public class Carade {
                             try { ttl = Long.parseLong(parts.get(4)); } catch (Exception e) {}
                         }
                         store.put(parts.get(1), new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, ttl));
+                        notifyWatchers(key);
                         if (ttl > 0) aofHandler.log("SET", key, val, "EX", String.valueOf(ttl));
                         else aofHandler.log("SET", key, val);
                         
@@ -1084,6 +1156,7 @@ public class Carade {
                                     newV.touch();
                                     return newV;
                                 });
+                                notifyWatchers(key);
                                 aofHandler.log("SETBIT", key, String.valueOf(offset), String.valueOf(val));
                                 send(out, isResp, Resp.integer(oldBit[0]), "(integer) " + oldBit[0]);
                             }
@@ -1135,6 +1208,7 @@ public class Carade {
                             String key = parts.get(i);
                             String val = parts.get(i + 1);
                             store.put(key, new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
+                            notifyWatchers(key);
                         }
                         if (aofHandler != null) {
                             String[] logArgs = new String[parts.size() - 1];
@@ -1301,6 +1375,7 @@ public class Carade {
                                 newV.touch();
                                 return newV;
                             });
+                            notifyWatchers(key);
                             aofHandler.log(cmd, key);
                             send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                         } catch (RuntimeException e) {
@@ -1343,6 +1418,8 @@ public class Carade {
                                 return v;
                             });
                             
+                            notifyWatchers(key);
+
                             // Log: cmd key v1 v2 ...
                             String[] args = new String[parts.size()-1];
                             for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
@@ -1376,6 +1453,7 @@ public class Carade {
                                         if (val != null) {
                                             aofHandler.log(cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
                                             if (list.isEmpty()) store.remove(k);
+                                    notifyWatchers(k);
                                             send(out, isResp, Resp.array(Arrays.asList(k, val)), null);
                                             served = true;
                                             break;
@@ -1428,6 +1506,7 @@ public class Carade {
                                 if (val != null) {
                                     aofHandler.log(cmd, key);
                                     if (list.isEmpty()) store.remove(key); // Remove empty list
+                                    notifyWatchers(key);
                                     send(out, isResp, Resp.bulkString(val), val);
                                 } else {
                                     send(out, isResp, Resp.bulkString(null), "(nil)");
@@ -1506,6 +1585,7 @@ public class Carade {
                                 return v;
                             });
                             
+                            notifyWatchers(key);
                             String[] args = new String[parts.size()-1];
                             for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
                             aofHandler.log("HSET", args);
@@ -1570,7 +1650,10 @@ public class Carade {
                             }
                             return v;
                         });
-                        if (ret[0] == 1) aofHandler.log("HDEL", key, field);
+                        if (ret[0] == 1) {
+                            notifyWatchers(key);
+                            aofHandler.log("HDEL", key, field);
+                        }
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     }
                     break;
@@ -1607,6 +1690,7 @@ public class Carade {
                                     return v;
                                 }
                             });
+                            notifyWatchers(key);
                             aofHandler.log("HINCRBY", key, field, parts.get(3));
                             send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                         } catch (NumberFormatException e) {
@@ -1645,6 +1729,7 @@ public class Carade {
                                     return v;
                                 }
                             });
+                            if (ret[0] == 1) notifyWatchers(key);
                             aofHandler.log("SADD", key, member);
                             send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                         } catch (RuntimeException e) {
@@ -1686,7 +1771,10 @@ public class Carade {
                             }
                             return v;
                         });
-                        if (ret[0] == 1) aofHandler.log("SREM", key, member);
+                        if (ret[0] == 1) {
+                             notifyWatchers(key);
+                             aofHandler.log("SREM", key, member);
+                        }
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     }
                     break;
@@ -1799,7 +1887,10 @@ public class Carade {
                     else { 
                         String key = parts.get(1);
                         ValueEntry prev = store.remove(key);
-                        if (prev != null) aofHandler.log("DEL", key);
+                        if (prev != null) {
+                            notifyWatchers(key);
+                            aofHandler.log("DEL", key);
+                        }
                         send(out, isResp, Resp.integer(prev != null ? 1 : 0), "(integer) " + (prev != null ? 1 : 0));
                     }
                     break;
@@ -1835,6 +1926,7 @@ public class Carade {
                                     return v;
                                 });
                                 
+                                notifyWatchers(key);
                                 String[] args = new String[parts.size()-1];
                                 for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
                                 aofHandler.log("ZADD", args);
@@ -2006,7 +2098,10 @@ public class Carade {
                              }
                              return v;
                          });
-                         if (ret[0] == 1) aofHandler.log("ZREM", key, member);
+                         if (ret[0] == 1) {
+                             notifyWatchers(key);
+                             aofHandler.log("ZREM", key, member);
+                         }
                          send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                      }
                      break;
@@ -2132,6 +2227,14 @@ public class Carade {
                     break;
                 case "DBSIZE": send(out, isResp, Resp.integer(store.size()), "(integer) " + store.size()); break;
                 case "FLUSHALL": 
+                    // Notify all watchers as all keys are gone
+                    // We can't iterate all keys easily if map is huge, but we can iterate watchers map
+                    // Or since store.clear() happens, we can just clear watchers map too?
+                    // Actually, if we clear watchers map, we lose the clients references.
+                    // We should iterate watchers and notify all of them.
+                    for (String k : watchers.keySet()) {
+                        notifyWatchers(k);
+                    }
                     store.clear(); 
                     aofHandler.log("FLUSHALL");
                     send(out, isResp, Resp.simpleString("OK"), "OK"); 
