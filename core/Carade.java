@@ -915,13 +915,24 @@ public class Carade {
                             continue;
                         }
 
-                        // Acquire read lock for normal commands to ensure they don't run during EXEC,
-                        // but allow concurrent execution with other normal commands.
-                        globalRWLock.readLock().lock();
-                        try {
-                            executeCommand(parts, out, isResp);
-                        } finally {
-                            globalRWLock.readLock().unlock();
+                        // Identify if command needs exclusive write lock (Global Lock)
+                        boolean needsExclusive = Arrays.asList("RENAME", "MSET", "FLUSHALL", "BGREWRITEAOF").contains(cmd);
+                        
+                        if (needsExclusive) {
+                            globalRWLock.writeLock().lock();
+                            try {
+                                executeCommand(parts, out, isResp);
+                            } finally {
+                                globalRWLock.writeLock().unlock();
+                            }
+                        } else {
+                            // Acquire read lock for normal commands (concurrent)
+                            globalRWLock.readLock().lock();
+                            try {
+                                executeCommand(parts, out, isResp);
+                            } finally {
+                                globalRWLock.readLock().unlock();
+                            }
                         }
                         
                         if (cmd.equals("QUIT")) return;
