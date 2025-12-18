@@ -1,21 +1,20 @@
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.nio.charset.StandardCharsets;
 
 public class AofHandler {
     private final String filename;
-    private PrintWriter writer;
+    private OutputStream outStream;
     private final ScheduledExecutorService flusher;
     // Buffer for commands received during rewrite
-    private final ConcurrentLinkedQueue<String> rewriteBuffer = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<byte[]> rewriteBuffer = new ConcurrentLinkedQueue<>();
     private volatile boolean isRewriting = false;
     
     public AofHandler(String filename) {
         this.filename = filename;
         try {
-            // Append mode, autoFlush = false (buffered)
-            // Use BufferedWriter explicitly for better buffering control, though PrintWriter wraps it usually.
-            this.writer = new PrintWriter(new BufferedWriter(new FileWriter(filename, true))); 
+            this.outStream = new BufferedOutputStream(new FileOutputStream(filename, true));
         } catch (IOException e) {
             System.err.println("⚠️ Could not open AOF file: " + e.getMessage());
         }
@@ -29,14 +28,26 @@ public class AofHandler {
         this.flusher.scheduleAtFixedRate(this::flush, 1, 1, TimeUnit.SECONDS);
     }
 
-    public synchronized void log(String cmd, String... args) {
-        List<String> parts = new ArrayList<>();
-        parts.add(cmd);
-        parts.addAll(Arrays.asList(args));
-        String resp = Resp.array(parts);
+    public synchronized void log(String cmd, Object... args) {
+        List<byte[]> parts = new ArrayList<>();
+        parts.add(cmd.getBytes(StandardCharsets.UTF_8));
+        for (Object arg : args) {
+            if (arg instanceof String) {
+                parts.add(((String) arg).getBytes(StandardCharsets.UTF_8));
+            } else if (arg instanceof byte[]) {
+                parts.add((byte[]) arg);
+            } else {
+                parts.add(String.valueOf(arg).getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        byte[] resp = Resp.array(parts);
         
-        if (writer != null) {
-            writer.print(resp);
+        if (outStream != null && resp != null) {
+            try {
+                outStream.write(resp);
+            } catch (IOException e) {
+                System.err.println("⚠️ Failed to write to AOF: " + e.getMessage());
+            }
         }
         
         if (isRewriting) {
@@ -45,8 +56,12 @@ public class AofHandler {
     }
 
     private synchronized void flush() {
-        if (writer != null) {
-            writer.flush();
+        if (outStream != null) {
+            try {
+                outStream.flush();
+            } catch (IOException e) {
+                // ignore
+            }
         }
     }
 
@@ -55,12 +70,9 @@ public class AofHandler {
         rewriteBuffer.clear();
         
         String tempFile = filename + ".tmp";
-        // Use a flag to track if we should try to rename. 
-        // We cannot rely on try-with-resources to close BEFORE we rename inside the block.
-        // So we must structure it differently.
-        PrintWriter tempWriter = null;
+        OutputStream tempOut = null;
         try {
-            tempWriter = new PrintWriter(new BufferedWriter(new FileWriter(tempFile)));
+            tempOut = new BufferedOutputStream(new FileOutputStream(tempFile));
             for (Map.Entry<String, Carade.ValueEntry> entry : store.entrySet()) {
                 String key = entry.getKey();
                 Carade.ValueEntry val = entry.getValue();
@@ -68,66 +80,52 @@ public class AofHandler {
 
                 // Reconstruct commands based on type
                 if (val.type == Carade.DataType.STRING) {
-                     String v = new String((byte[]) val.value, java.nio.charset.StandardCharsets.UTF_8);
-                     // Expiry logic? If it has expiry, we should preserve it.
-                     // Current Carade.ValueEntry stores expireAt (absolute time).
-                     // SET key value EX ttl
+                     byte[] v = (byte[]) val.value;
                      if (val.expireAt > 0) {
                          long ttl = (val.expireAt - System.currentTimeMillis()) / 1000;
                          if (ttl <= 0) continue; // Expired
-                         tempWriter.print(Resp.array(Arrays.asList("SET", key, v, "EX", String.valueOf(ttl))));
+                         writeCommand(tempOut, "SET", key.getBytes(StandardCharsets.UTF_8), v, "EX".getBytes(StandardCharsets.UTF_8), String.valueOf(ttl).getBytes(StandardCharsets.UTF_8));
                      } else {
-                         tempWriter.print(Resp.array(Arrays.asList("SET", key, v)));
+                         writeCommand(tempOut, "SET", key.getBytes(StandardCharsets.UTF_8), v);
                      }
                 } else if (val.type == Carade.DataType.LIST) {
                     ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) val.value;
-                    // RPUSH key v1 v2 ... (But our RPUSH takes one arg currently, so multiple RPUSHes)
-                    // Or better: Redis RPUSH accepts multiple args. Carade only 1.
-                    // So we must emit multiple RPUSH or modify Carade to accept multiple.
-                    // Carade `RPUSH key value` in `executeInternal` only takes 1 value.
-                    // So we must loop.
                     for (String s : list) {
-                        tempWriter.print(Resp.array(Arrays.asList("RPUSH", key, s)));
+                        writeCommand(tempOut, "RPUSH", key.getBytes(StandardCharsets.UTF_8), s.getBytes(StandardCharsets.UTF_8));
                     }
                 } else if (val.type == Carade.DataType.HASH) {
                     ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) val.value;
                     for (Map.Entry<String, String> e : map.entrySet()) {
-                        tempWriter.print(Resp.array(Arrays.asList("HSET", key, e.getKey(), e.getValue())));
+                        writeCommand(tempOut, "HSET", key.getBytes(StandardCharsets.UTF_8), e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().getBytes(StandardCharsets.UTF_8));
                     }
                 } else if (val.type == Carade.DataType.SET) {
                     Set<String> set = (Set<String>) val.value;
                     for (String s : set) {
-                        tempWriter.print(Resp.array(Arrays.asList("SADD", key, s)));
+                        writeCommand(tempOut, "SADD", key.getBytes(StandardCharsets.UTF_8), s.getBytes(StandardCharsets.UTF_8));
                     }
                 } else if (val.type == Carade.DataType.ZSET) {
                     Carade.CaradeZSet zset = (Carade.CaradeZSet) val.value;
-                    // ZADD key score member
-                    // We can batch, but for simplicity one by one is fine for rewrite
                     for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
-                        tempWriter.print(Resp.array(Arrays.asList("ZADD", key, String.valueOf(e.getValue()), e.getKey())));
+                         writeCommand(tempOut, "ZADD", key.getBytes(StandardCharsets.UTF_8), String.valueOf(e.getValue()).getBytes(StandardCharsets.UTF_8), e.getKey().getBytes(StandardCharsets.UTF_8));
                     }
                 }
             }
             
             // Append commands that happened during rewrite
-            // We need to lock briefly to ensure we get the last commands and stop buffering
             synchronized(this) {
-                for (String cmd : rewriteBuffer) {
-                    tempWriter.print(cmd);
+                for (byte[] cmd : rewriteBuffer) {
+                    tempOut.write(cmd);
                 }
-                tempWriter.flush();
+                tempOut.flush();
                 isRewriting = false;
                 rewriteBuffer.clear();
                 
-                // Close the temp writer explicitly BEFORE rename
-                tempWriter.close();
-                tempWriter = null;
+                tempOut.close();
+                tempOut = null;
 
-                // Now swap files inside the lock to prevent new logs from being lost/split badly
-                // Close current writer to release lock/handle
-                if (writer != null) {
-                    writer.flush();
-                    writer.close();
+                if (outStream != null) {
+                    outStream.flush();
+                    outStream.close();
                 }
 
                 File temp = new File(tempFile);
@@ -140,9 +138,8 @@ public class AofHandler {
                      System.err.println("⚠️ AOF Rewrite failed to rename temp file.");
                 }
                 
-                // Re-open
                 try {
-                   this.writer = new PrintWriter(new BufferedWriter(new FileWriter(filename, true)));
+                   this.outStream = new BufferedOutputStream(new FileOutputStream(filename, true));
                 } catch (IOException e) {
                     System.err.println("⚠️ FATAL: Could not re-open AOF: " + e.getMessage());
                 }
@@ -152,11 +149,18 @@ public class AofHandler {
             System.err.println("⚠️ AOF Rewrite failed: " + e.getMessage());
             isRewriting = false;
         } finally {
-            if (tempWriter != null) tempWriter.close();
+            if (tempOut != null) try { tempOut.close(); } catch (IOException e) {}
         }
     }
     
-    public void replay(java.util.function.Consumer<List<String>> commandExecutor) {
+    private void writeCommand(OutputStream out, String cmd, byte[]... args) throws IOException {
+        List<byte[]> parts = new ArrayList<>();
+        parts.add(cmd.getBytes(StandardCharsets.UTF_8));
+        for (byte[] arg : args) parts.add(arg);
+        out.write(Resp.array(parts));
+    }
+    
+    public void replay(java.util.function.Consumer<List<byte[]>> commandExecutor) {
         File f = new File(filename);
         if (!f.exists()) return;
         
@@ -184,9 +188,11 @@ public class AofHandler {
         } catch (InterruptedException e) {
             flusher.shutdownNow();
         }
-        if (writer != null) {
-            writer.flush();
-            writer.close();
+        if (outStream != null) {
+            try {
+                outStream.flush();
+                outStream.close();
+            } catch (IOException e) { }
         }
     }
 }

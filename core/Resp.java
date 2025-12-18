@@ -9,26 +9,36 @@ public class Resp {
     public static final char INTEGER = ':';
     
     public static class Request {
-        public List<String> args;
+        public List<byte[]> args;
         public boolean isResp;
         
-        public Request(List<String> args, boolean isResp) {
+        public Request(List<byte[]> args, boolean isResp) {
             this.args = args;
             this.isResp = isResp;
         }
     }
     
     // --- SERIALIZATION ---
-    public static String simpleString(String s) { return "+" + s + "\r\n"; }
-    public static String error(String s) { return "-" + s + "\r\n"; }
-    public static String integer(long i) { return ":" + i + "\r\n"; }
-    public static String bulkString(String s) { 
-        if (s == null) return "$-1\r\n";
-        byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return "$" + b.length + "\r\n" + s + "\r\n";
+    public static byte[] simpleString(String s) { 
+        return ("+" + s + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8); 
     }
     
-    public static byte[] bulkStringBytes(byte[] b) {
+    public static byte[] error(String s) { 
+        return ("-" + s + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8); 
+    }
+    
+    public static byte[] integer(long i) { 
+        return (":" + i + "\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8); 
+    }
+    
+    // Legacy support for String args (converts to UTF-8 bytes)
+    public static byte[] bulkString(String s) { 
+        if (s == null) return "$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return bulkString(b);
+    }
+    
+    public static byte[] bulkString(byte[] b) {
         if (b == null) return "$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         try {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -40,18 +50,19 @@ public class Resp {
         } catch (IOException e) { return null; }
     }
     
-    // Helper to allow writing bytes directly would be better, but requires changing callers.
-    // For this specific task, we will try to handle it.
-    public static String array(List<String> list) {
-        if (list == null) return "*-1\r\n";
-        StringBuilder sb = new StringBuilder();
-        sb.append("*").append(list.size()).append("\r\n");
-        for (String s : list) {
-            sb.append(bulkString(s));
-        }
-        return sb.toString();
+    public static byte[] array(List<byte[]> list) {
+        if (list == null) return "*-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            String header = "*" + list.size() + "\r\n";
+            bos.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (byte[] b : list) {
+                bos.write(bulkString(b));
+            }
+            return bos.toByteArray();
+        } catch (IOException e) { return null; }
     }
-    
+
     // --- PARSING ---
     public static Request parse(InputStream is) throws IOException {
         PushbackInputStream in = new PushbackInputStream(is);
@@ -67,19 +78,19 @@ public class Resp {
         }
     }
 
-    private static List<String> parseRespArray(InputStream in) throws IOException {
+    private static List<byte[]> parseRespArray(InputStream in) throws IOException {
         int b = in.read();
         if (b != ARRAY) throw new IOException("Expected *");
         
         long count = readLong(in);
-        List<String> result = new ArrayList<>();
+        List<byte[]> result = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             result.add(readBulkString(in));
         }
         return result;
     }
 
-    private static String readBulkString(InputStream in) throws IOException {
+    private static byte[] readBulkString(InputStream in) throws IOException {
         int b = in.read();
         if (b != BULK_STRING) throw new IOException("Expected $");
         
@@ -96,7 +107,7 @@ public class Resp {
         // Consume \r\n
         if (in.read() != '\r' || in.read() != '\n') throw new IOException("Expected CRLF after BulkString");
         
-        return new String(bytes); // Assume UTF-8
+        return bytes;
     }
 
     private static long readLong(InputStream in) throws IOException {
@@ -112,22 +123,25 @@ public class Resp {
         return Long.parseLong(sb.toString());
     }
 
-    private static List<String> parseInline(InputStream in) throws IOException {
+    private static List<byte[]> parseInline(InputStream in) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         int b;
         while ((b = in.read()) != -1) {
             if (b == '\n') break; 
             buffer.write(b);
         }
-        String line = buffer.toString().trim();
+        String line = buffer.toString().trim(); // This uses default charset, acceptable for inline
         if (line.isEmpty()) return Collections.emptyList();
         
-        List<String> list = new ArrayList<>();
+        List<byte[]> list = new ArrayList<>();
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("([^\"]\\S*|\".+?\")\\s*").matcher(line);
         while (m.find()) {
             String match = m.group(1);
-            if (match.startsWith("\"") && match.endsWith("\"")) list.add(match.substring(1, match.length() - 1));
-            else list.add(match);
+            if (match.startsWith("\"") && match.endsWith("\"")) {
+                list.add(match.substring(1, match.length() - 1).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } else {
+                list.add(match.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
         }
         return list;
     }

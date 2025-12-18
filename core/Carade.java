@@ -6,6 +6,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Project: Carade
@@ -84,11 +85,6 @@ public class Carade {
             this.lastAccessed = System.nanoTime();
         }
         
-        // Constructor for legacy migration (String only)
-        ValueEntry(String value, long ttlSeconds) {
-            this(value, DataType.STRING, ttlSeconds);
-        }
-
         boolean isExpired() { return expireAt != -1 && System.currentTimeMillis() > expireAt; }
         
         void touch() { this.lastAccessed = System.nanoTime(); }
@@ -112,7 +108,7 @@ public class Carade {
 
     // --- BLOCKING QUEUES ---
     static class BlockingRequest {
-        final CompletableFuture<List<String>> future = new CompletableFuture<>();
+        final CompletableFuture<List<byte[]>> future = new CompletableFuture<>();
         final boolean isLeft;
         BlockingRequest(boolean isLeft) { this.isLeft = isLeft; }
     }
@@ -139,7 +135,7 @@ public class Carade {
                 
                 if (val != null) {
                     q.poll(); 
-                    boolean completed = req.future.complete(Arrays.asList(key, val));
+                    boolean completed = req.future.complete(Arrays.asList(key.getBytes(StandardCharsets.UTF_8), val.getBytes(StandardCharsets.UTF_8)));
                     if (!completed) {
                         if (req.isLeft) list.addFirst(val); else list.addLast(val); // Revert
                         continue;
@@ -286,26 +282,28 @@ public class Carade {
         }
     }
 
-    private static void executeInternal(List<String> parts) {
+    private static void executeInternal(List<byte[]> parts) {
         if (parts.isEmpty()) return;
-        String cmd = parts.get(0).toUpperCase();
+        String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
         try {
             switch (cmd) {
                 case "SET":
                     if (parts.size() >= 3) {
                         long ttl = -1;
-                        if (parts.size() >= 5 && parts.get(3).equalsIgnoreCase("EX")) {
-                            try { ttl = Long.parseLong(parts.get(4)); } catch (Exception e) {}
+                        if (parts.size() >= 5 && new String(parts.get(3), StandardCharsets.UTF_8).equalsIgnoreCase("EX")) {
+                            try { ttl = Long.parseLong(new String(parts.get(4), StandardCharsets.UTF_8)); } catch (Exception e) {}
                         }
-                        store.put(parts.get(1), new ValueEntry(parts.get(2).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, ttl));
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        store.put(key, new ValueEntry(parts.get(2), DataType.STRING, ttl));
                     }
                     break;
                 case "SETBIT":
+                    // To be strictly correct with byte arrays we should adapt this, but for now we keep string based logic where acceptable
                     if (parts.size() >= 4) {
-                         String key = parts.get(1);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          try {
-                             int offset = Integer.parseInt(parts.get(2));
-                             int val = Integer.parseInt(parts.get(3));
+                             int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                             int val = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
                              store.compute(key, (k, v) -> {
                                  byte[] bytes;
                                  if (v == null) bytes = new byte[0];
@@ -331,17 +329,19 @@ public class Carade {
                     break;
                 case "RENAME":
                     if (parts.size() >= 3) {
-                         ValueEntry v = store.remove(parts.get(1));
-                         if (v != null) store.put(parts.get(2), v);
+                         String oldKey = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String newKey = new String(parts.get(2), StandardCharsets.UTF_8);
+                         ValueEntry v = store.remove(oldKey);
+                         if (v != null) store.put(newKey, v);
                     }
                     break;
                 case "DEL":
-                    if (parts.size() >= 2) store.remove(parts.get(1));
+                    if (parts.size() >= 2) store.remove(new String(parts.get(1), StandardCharsets.UTF_8));
                     break;
                 case "HDEL":
                     if (parts.size() >= 3) {
-                        String key = parts.get(1);
-                        String field = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.HASH) {
                                 ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
@@ -354,8 +354,8 @@ public class Carade {
                     break;
                 case "SREM":
                     if (parts.size() >= 3) {
-                         String key = parts.get(1);
-                         String member = parts.get(2);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.SET) {
                                 Set<String> set = (Set<String>) v.value;
@@ -368,8 +368,8 @@ public class Carade {
                     break;
                 case "ZREM":
                     if (parts.size() >= 3) {
-                         String key = parts.get(1);
-                         String member = parts.get(2);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.ZSET) {
                                 CaradeZSet zset = (CaradeZSet) v.value;
@@ -385,7 +385,7 @@ public class Carade {
                     break;
                 case "ZADD":
                     if (parts.size() >= 4) {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         try {
                              store.compute(key, (k, v) -> {
                                  CaradeZSet zset;
@@ -400,8 +400,8 @@ public class Carade {
                                  
                                  for (int i = 2; i < parts.size(); i += 2) {
                                      try {
-                                         double score = Double.parseDouble(parts.get(i));
-                                         String member = parts.get(i+1);
+                                         double score = Double.parseDouble(new String(parts.get(i), StandardCharsets.UTF_8));
+                                         String member = new String(parts.get(i+1), StandardCharsets.UTF_8);
                                          zset.add(score, member);
                                      } catch (Exception ex) {}
                                  }
@@ -414,9 +414,9 @@ public class Carade {
                     if (parts.size() >= 3) {
                         for (int i = 1; i < parts.size(); i += 2) {
                             if (i + 1 < parts.size()) {
-                                String key = parts.get(i);
-                                String val = parts.get(i+1);
-                                store.put(key, new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
+                                String key = new String(parts.get(i), StandardCharsets.UTF_8);
+                                byte[] val = parts.get(i+1);
+                                store.put(key, new ValueEntry(val, DataType.STRING, -1));
                             }
                         }
                     }
@@ -424,8 +424,8 @@ public class Carade {
                 case "LPUSH":
                 case "RPUSH":
                     if (parts.size() >= 3) {
-                        String key = parts.get(1);
-                        String val = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String val = new String(parts.get(2), StandardCharsets.UTF_8);
                         store.compute(key, (k, v) -> {
                             if (v == null) {
                                 ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
@@ -443,7 +443,7 @@ public class Carade {
                 case "LPOP":
                 case "RPOP":
                      if (parts.size() >= 2) {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.LIST) {
                                 ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
@@ -458,9 +458,9 @@ public class Carade {
                      break;
                 case "HSET":
                     if (parts.size() >= 4) {
-                        String key = parts.get(1);
-                        String field = parts.get(2);
-                        String val = parts.get(3);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String field = new String(parts.get(2), StandardCharsets.UTF_8);
+                        String val = new String(parts.get(3), StandardCharsets.UTF_8);
                         store.compute(key, (k, v) -> {
                             if (v == null) {
                                 ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
@@ -475,10 +475,10 @@ public class Carade {
                     break;
                 case "HINCRBY":
                     if (parts.size() >= 4) {
-                         String key = parts.get(1);
-                         String field = parts.get(2);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String field = new String(parts.get(2), StandardCharsets.UTF_8);
                          try {
-                             long incr = Long.parseLong(parts.get(3));
+                             long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
                              store.compute(key, (k, v) -> {
                                 if (v == null) {
                                     ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
@@ -504,8 +504,8 @@ public class Carade {
                     break;
                 case "SADD":
                     if (parts.size() >= 3) {
-                         String key = parts.get(1);
-                         String member = parts.get(2);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          store.compute(key, (k, v) -> {
                             if (v == null) {
                                 Set<String> set = ConcurrentHashMap.newKeySet();
@@ -524,7 +524,7 @@ public class Carade {
                 case "INCR":
                 case "DECR":
                     if (parts.size() >= 2) {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         store.compute(key, (k, v) -> {
                             long val = 0;
                             if (v == null) {
@@ -545,9 +545,9 @@ public class Carade {
                     break;
                 case "EXPIRE":
                     if (parts.size() >= 3) {
-                         String key = parts.get(1);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          try {
-                             long seconds = Long.parseLong(parts.get(2));
+                             long seconds = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
                              store.computeIfPresent(key, (k, v) -> {
                                  v.expireAt = System.currentTimeMillis() + (seconds * 1000);
                                  return v;
@@ -766,7 +766,7 @@ public class Carade {
         private boolean isInTransaction = false;
         private volatile boolean transactionDirty = false;
         private Set<String> watching = new HashSet<>();
-        private List<List<String>> transactionQueue = new ArrayList<>();
+        private List<List<byte[]>> transactionQueue = new ArrayList<>();
 
         public ClientHandler(Socket socket) { this.socket = socket; }
 
@@ -785,28 +785,17 @@ public class Carade {
             watching.clear();
         }
 
-        private synchronized void send(OutputStream out, boolean isResp, String respData, String textData) {
+        private synchronized void send(OutputStream out, boolean isResp, byte[] respData, String textData) {
             try {
                 if (isResp) {
-                     if (respData != null) out.write(respData.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                     if (respData != null) out.write(respData);
                 }
-                else out.write((textData + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                else {
+                    if (textData != null) out.write((textData + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
                 out.flush();
             } catch (IOException e) {
                 // Ignore, connection likely closed
-            }
-        }
-        
-        // Helper for binary safe send
-        private synchronized void sendBytes(OutputStream out, boolean isResp, byte[] respData, String textData) {
-             try {
-                if (isResp) {
-                     if (respData != null) out.write(respData);
-                } else {
-                     if (textData != null) out.write((textData + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-                out.flush();
-            } catch (IOException e) {
             }
         }
 
@@ -826,10 +815,17 @@ public class Carade {
             // Callback from PubSub engine
             if (currentIsResp) {
                 if (pattern != null) {
-                    List<String> resp = Arrays.asList("pmessage", pattern, channel, message);
+                    List<byte[]> resp = new ArrayList<>();
+                    resp.add("pmessage".getBytes(StandardCharsets.UTF_8));
+                    resp.add(pattern.getBytes(StandardCharsets.UTF_8));
+                    resp.add(channel.getBytes(StandardCharsets.UTF_8));
+                    resp.add(message.getBytes(StandardCharsets.UTF_8));
                     send(outStream, true, Resp.array(resp), null);
                 } else {
-                    List<String> resp = Arrays.asList("message", channel, message);
+                    List<byte[]> resp = new ArrayList<>();
+                    resp.add("message".getBytes(StandardCharsets.UTF_8));
+                    resp.add(channel.getBytes(StandardCharsets.UTF_8));
+                    resp.add(message.getBytes(StandardCharsets.UTF_8));
                     send(outStream, true, Resp.array(resp), null);
                 }
             } else {
@@ -854,14 +850,14 @@ public class Carade {
                 while (true) {
                     Resp.Request req = Resp.parse(in);
                     if (req == null) break;
-                    List<String> parts = req.args;
+                    List<byte[]> parts = req.args;
                     this.currentIsResp = req.isResp;
                     boolean isResp = req.isResp;
 
                     if (parts.isEmpty()) continue;
                     totalCommands.incrementAndGet();
 
-                    String cmd = parts.get(0).toUpperCase();
+                    String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
 
                     // Handle Subs commands in Sub mode
                     if (isSubscribed) {
@@ -918,7 +914,7 @@ public class Carade {
                                 isInTransaction = false;
                                 
                                 if (transactionDirty) {
-                                    send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                                     transactionQueue.clear();
                                     transactionDirty = false;
                                     unwatchAll();
@@ -939,7 +935,7 @@ public class Carade {
                                         String header = "*" + transactionQueue.size() + "\r\n";
                                         buffer.write(header.getBytes());
                                         
-                                        for (List<String> queuedCmd : transactionQueue) {
+                                        for (List<byte[]> queuedCmd : transactionQueue) {
                                             executeCommand(queuedCmd, buffer, isResp);
                                         }
                                         out.write(buffer.toByteArray());
@@ -958,7 +954,7 @@ public class Carade {
                                     send(out, isResp, Resp.error("usage: WATCH key [key ...]"), "(error) usage: WATCH key [key ...]");
                                 } else {
                                     for (int i = 1; i < parts.size(); i++) {
-                                        String key = parts.get(i);
+                                        String key = new String(parts.get(i), StandardCharsets.UTF_8);
                                         watching.add(key);
                                         watchers.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(this);
                                     }
@@ -1014,11 +1010,9 @@ public class Carade {
         }
         
         // Extracted command execution logic
-        private void executeCommand(List<String> parts, OutputStream out, boolean isResp) throws IOException {
-            String cmd = parts.get(0).toUpperCase();
+        private void executeCommand(List<byte[]> parts, OutputStream out, boolean isResp) throws IOException {
+            String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
             // Notify watchers for modification commands
-            // We do this by checking if the command modifies data and calling notifyWatchers(key)
-            // Ideally we do this inside each case block to be precise about WHICH key changed.
             
             switch (cmd) {
                 case "AUTH":
@@ -1027,10 +1021,10 @@ public class Carade {
                         String user = "default";
                         String pass = "";
                         if (parts.size() == 2) {
-                            pass = parts.get(1);
+                            pass = new String(parts.get(1), StandardCharsets.UTF_8);
                         } else {
-                            user = parts.get(1);
-                            pass = parts.get(2);
+                            user = new String(parts.get(1), StandardCharsets.UTF_8);
+                            pass = new String(parts.get(2), StandardCharsets.UTF_8);
                         }
                         
                         Config.User u = config.users.get(user);
@@ -1046,7 +1040,7 @@ public class Carade {
                 case "EXISTS":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: EXISTS key"), "(error) usage: EXISTS key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.isExpired()) {
                              if (entry != null && entry.isExpired()) store.remove(key);
@@ -1060,7 +1054,7 @@ public class Carade {
                 case "TYPE":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: TYPE key"), "(error) usage: TYPE key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.isExpired()) {
                              if (entry != null && entry.isExpired()) store.remove(key);
@@ -1074,11 +1068,9 @@ public class Carade {
                 case "RENAME":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: RENAME key newkey"), "(error) usage: RENAME key newkey");
                     else {
-                        String oldKey = parts.get(1);
-                        String newKey = parts.get(2);
+                        String oldKey = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String newKey = new String(parts.get(2), StandardCharsets.UTF_8);
                         
-                        // We need to handle this atomically enough for our purpose
-                        // remove() returns null if not present
                         ValueEntry val = store.remove(oldKey);
                         if (val == null || val.isExpired()) {
                             if (val != null) store.remove(oldKey); // Cleanup
@@ -1098,12 +1090,12 @@ public class Carade {
                     else {
                         performEvictionIfNeeded();
                         long ttl = -1;
-                        String key = parts.get(1);
-                        String val = parts.get(2);
-                        if (parts.size() >= 5 && parts.get(3).equalsIgnoreCase("EX")) {
-                            try { ttl = Long.parseLong(parts.get(4)); } catch (Exception e) {}
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        byte[] val = parts.get(2);
+                        if (parts.size() >= 5 && new String(parts.get(3), StandardCharsets.UTF_8).equalsIgnoreCase("EX")) {
+                            try { ttl = Long.parseLong(new String(parts.get(4), StandardCharsets.UTF_8)); } catch (Exception e) {}
                         }
-                        store.put(parts.get(1), new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, ttl));
+                        store.put(key, new ValueEntry(val, DataType.STRING, ttl));
                         notifyWatchers(key);
                         if (ttl > 0) aofHandler.log("SET", key, val, "EX", String.valueOf(ttl));
                         else aofHandler.log("SET", key, val);
@@ -1116,11 +1108,11 @@ public class Carade {
                     if (parts.size() < 4) send(out, isResp, Resp.error("usage: SETBIT key offset value"), "(error) usage: SETBIT key offset value");
                     else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         final int[] oldBit = {0};
                         try {
-                            int offset = Integer.parseInt(parts.get(2));
-                            int val = Integer.parseInt(parts.get(3));
+                            int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                            int val = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
                             if (val != 0 && val != 1) {
                                 send(out, isResp, Resp.error("ERR bit is not an integer or out of range"), "(error) ERR bit is not an integer or out of range");
                             } else if (offset < 0) {
@@ -1174,9 +1166,9 @@ public class Carade {
                 case "GETBIT":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: GETBIT key offset"), "(error) usage: GETBIT key offset");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         try {
-                            int offset = Integer.parseInt(parts.get(2));
+                            int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
                             ValueEntry entry = store.get(key);
                             if (entry == null) {
                                 send(out, isResp, Resp.integer(0), "(integer) 0");
@@ -1205,14 +1197,17 @@ public class Carade {
                     } else {
                         performEvictionIfNeeded();
                         for (int i = 1; i < parts.size(); i += 2) {
-                            String key = parts.get(i);
-                            String val = parts.get(i + 1);
-                            store.put(key, new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
+                            String key = new String(parts.get(i), StandardCharsets.UTF_8);
+                            byte[] val = parts.get(i + 1);
+                            store.put(key, new ValueEntry(val, DataType.STRING, -1));
                             notifyWatchers(key);
                         }
                         if (aofHandler != null) {
-                            String[] logArgs = new String[parts.size() - 1];
-                            for(int i=1; i<parts.size(); i++) logArgs[i-1] = parts.get(i);
+                            Object[] logArgs = new Object[parts.size() - 1];
+                            for(int i=1; i<parts.size(); i++) {
+                                if ((i-1) % 2 == 0) logArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
+                                else logArgs[i-1] = parts.get(i);
+                            }
                             aofHandler.log("MSET", logArgs);
                         }
                         send(out, isResp, Resp.simpleString("OK"), "OK");
@@ -1222,16 +1217,17 @@ public class Carade {
                 case "GET":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: GET key"), "(error) usage: GET key");
                     else {
-                        ValueEntry entry = store.get(parts.get(1));
-                        if (entry == null) send(out, isResp, Resp.bulkString(null), "(nil)");
-                        else if (entry.isExpired()) { store.remove(parts.get(1)); send(out, isResp, Resp.bulkString(null), "(nil)"); }
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        ValueEntry entry = store.get(key);
+                        if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
+                        else if (entry.isExpired()) { store.remove(key); send(out, isResp, Resp.bulkString((byte[])null), "(nil)"); }
                         else { 
                             entry.touch(); // LRU update
                             if (entry.type != DataType.STRING && entry.type != null) {
                                 send(out, isResp, Resp.error("WRONGTYPE Operation against a key holding the wrong kind of value"), "(error) WRONGTYPE");
                             } else {
                                 byte[] v = (byte[]) entry.value;
-                                sendBytes(out, isResp, Resp.bulkStringBytes(v), new String(v, java.nio.charset.StandardCharsets.UTF_8));
+                                send(out, isResp, Resp.bulkString(v), new String(v, StandardCharsets.UTF_8));
                             }
                         }
                     }
@@ -1242,35 +1238,31 @@ public class Carade {
                         send(out, isResp, Resp.error("wrong number of arguments for 'mget' command"), "(error) wrong number of arguments for 'mget' command");
                     } else {
                         if (isResp) {
-                            // Specialized path for binary-safe MGET in RESP mode
-                            try {
-                                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                                bos.write(("*"+(parts.size()-1)+"\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                                for (int i = 1; i < parts.size(); i++) {
-                                    String key = parts.get(i);
-                                    ValueEntry entry = store.get(key);
-                                    if (entry == null || entry.isExpired() || entry.type != DataType.STRING) {
-                                        if (entry != null && entry.isExpired()) store.remove(key);
-                                        bos.write("$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                                    } else {
-                                        entry.touch();
-                                        bos.write(Resp.bulkStringBytes((byte[]) entry.value));
-                                    }
-                                }
-                                sendBytes(out, true, bos.toByteArray(), null);
-                            } catch (IOException e) {}
-                        } else {
-                            // Text mode fallback (not binary safe)
-                            List<String> results = new ArrayList<>();
+                            List<byte[]> results = new ArrayList<>();
                             for (int i = 1; i < parts.size(); i++) {
-                                String key = parts.get(i);
+                                String key = new String(parts.get(i), StandardCharsets.UTF_8);
                                 ValueEntry entry = store.get(key);
                                 if (entry == null || entry.isExpired() || entry.type != DataType.STRING) {
                                     if (entry != null && entry.isExpired()) store.remove(key);
                                     results.add(null);
                                 } else {
                                     entry.touch();
-                                    results.add(new String((byte[]) entry.value, java.nio.charset.StandardCharsets.UTF_8));
+                                    results.add((byte[]) entry.value);
+                                }
+                            }
+                            send(out, true, Resp.array(results), null);
+                        } else {
+                            // Text mode fallback
+                            List<String> results = new ArrayList<>();
+                            for (int i = 1; i < parts.size(); i++) {
+                                String key = new String(parts.get(i), StandardCharsets.UTF_8);
+                                ValueEntry entry = store.get(key);
+                                if (entry == null || entry.isExpired() || entry.type != DataType.STRING) {
+                                    if (entry != null && entry.isExpired()) store.remove(key);
+                                    results.add(null);
+                                } else {
+                                    entry.touch();
+                                    results.add(new String((byte[]) entry.value, StandardCharsets.UTF_8));
                                 }
                             }
                             StringBuilder sb = new StringBuilder();
@@ -1286,7 +1278,7 @@ public class Carade {
                 case "TTL":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: TTL key"), "(error) usage: TTL key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null) send(out, isResp, Resp.integer(-2), "(integer) -2");
                         else if (entry.expireAt == -1) send(out, isResp, Resp.integer(-1), "(integer) -1");
@@ -1305,9 +1297,9 @@ public class Carade {
                 case "EXPIRE":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: EXPIRE key seconds"), "(error) usage: EXPIRE key seconds");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         try {
-                            long seconds = Long.parseLong(parts.get(2));
+                            long seconds = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
                             final int[] ret = {0};
                             store.computeIfPresent(key, (k, v) -> {
                                 v.expireAt = System.currentTimeMillis() + (seconds * 1000);
@@ -1325,21 +1317,28 @@ public class Carade {
                 case "KEYS":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: KEYS pattern"), "(error) usage: KEYS pattern");
                     else {
-                        String pattern = parts.get(1);
-                        List<String> keys = new ArrayList<>();
+                        String pattern = new String(parts.get(1), StandardCharsets.UTF_8);
+                        List<byte[]> keys = new ArrayList<>();
+                        List<String> keyStrings = new ArrayList<>();
                         if (pattern.equals("*")) {
-                            keys.addAll(store.keySet());
+                            for(String k : store.keySet()) {
+                                keys.add(k.getBytes(StandardCharsets.UTF_8));
+                                keyStrings.add(k);
+                            }
                         } else {
                             String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
                             java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);
                             for (String k : store.keySet()) {
-                                if (p.matcher(k).matches()) keys.add(k);
+                                if (p.matcher(k).matches()) {
+                                    keys.add(k.getBytes(StandardCharsets.UTF_8));
+                                    keyStrings.add(k);
+                                }
                             }
                         }
                         if (isResp) send(out, true, Resp.array(keys), null);
                         else {
                             StringBuilder sb = new StringBuilder();
-                            for (int i = 0; i < keys.size(); i++) sb.append((i+1) + ") \"" + keys.get(i) + "\"\n");
+                            for (int i = 0; i < keyStrings.size(); i++) sb.append((i+1) + ") \"" + keyStrings.get(i) + "\"\n");
                             send(out, false, null, sb.toString().trim());
                         }
                     }
@@ -1350,7 +1349,7 @@ public class Carade {
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
                     else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         final long[] ret = {0};
                         try {
                             store.compute(key, (k, v) -> {
@@ -1361,7 +1360,7 @@ public class Carade {
                                     throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
                                 } else {
                                     try {
-                                        val = Long.parseLong(new String((byte[])v.value, java.nio.charset.StandardCharsets.UTF_8));
+                                        val = Long.parseLong(new String((byte[])v.value, StandardCharsets.UTF_8));
                                     } catch (NumberFormatException e) {
                                         throw new RuntimeException("ERR value is not an integer or out of range");
                                     }
@@ -1370,7 +1369,7 @@ public class Carade {
                                 if (cmd.equals("INCR")) val++; else val--;
                                 ret[0] = val;
                                 
-                                ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1);
+                                ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(StandardCharsets.UTF_8), DataType.STRING, -1);
                                 if (v != null) newV.expireAt = v.expireAt;
                                 newV.touch();
                                 return newV;
@@ -1393,7 +1392,7 @@ public class Carade {
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: "+cmd+" key value [value ...]"), "(error) usage: "+cmd+" key value [value ...]");
                     else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         try {
                             store.compute(key, (k, v) -> {
                                 ConcurrentLinkedDeque<String> list;
@@ -1406,11 +1405,8 @@ public class Carade {
                                     list = (ConcurrentLinkedDeque<String>) v.value;
                                 }
                                 
-                                // LPUSH: push v1, then v2... so v2 is head.
-                                // Redis LPUSH key v1 v2 -> list: v2, v1
-                                // So we iterate parts normally.
                                 for (int i = 2; i < parts.size(); i++) {
-                                    String val = parts.get(i);
+                                    String val = new String(parts.get(i), StandardCharsets.UTF_8);
                                     if (cmd.equals("LPUSH")) list.addFirst(val); else list.addLast(val);
                                 }
                                 
@@ -1421,8 +1417,8 @@ public class Carade {
                             notifyWatchers(key);
 
                             // Log: cmd key v1 v2 ...
-                            String[] args = new String[parts.size()-1];
-                            for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
+                            Object[] args = new Object[parts.size()-1];
+                            for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
                             aofHandler.log(cmd, args);
                             
                             checkBlockers(key); // Notify waiters
@@ -1440,8 +1436,9 @@ public class Carade {
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: "+cmd+" key [key ...] timeout"), "(error) usage: "+cmd+" key [key ...] timeout");
                     else {
                         try {
-                            double timeout = Double.parseDouble(parts.get(parts.size()-1));
-                            List<String> keys = parts.subList(1, parts.size()-1);
+                            double timeout = Double.parseDouble(new String(parts.get(parts.size()-1), StandardCharsets.UTF_8));
+                            List<String> keys = new ArrayList<>();
+                            for(int i=1; i<parts.size()-1; i++) keys.add(new String(parts.get(i), StandardCharsets.UTF_8));
                             
                             boolean served = false;
                             for (String k : keys) {
@@ -1453,8 +1450,11 @@ public class Carade {
                                         if (val != null) {
                                             aofHandler.log(cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
                                             if (list.isEmpty()) store.remove(k);
-                                    notifyWatchers(k);
-                                            send(out, isResp, Resp.array(Arrays.asList(k, val)), null);
+                                            notifyWatchers(k);
+                                            List<byte[]> resp = new ArrayList<>();
+                                            resp.add(k.getBytes(StandardCharsets.UTF_8));
+                                            resp.add(val.getBytes(StandardCharsets.UTF_8));
+                                            send(out, isResp, Resp.array(resp), null);
                                             served = true;
                                             break;
                                         }
@@ -1469,19 +1469,19 @@ public class Carade {
                                 }
                                 
                                 try {
-                                    List<String> result;
+                                    List<byte[]> result;
                                     if (timeout <= 0) {
                                         result = bReq.future.get(); 
                                     } else {
-                                            result = bReq.future.get((long)(timeout * 1000), TimeUnit.MILLISECONDS);
+                                        result = bReq.future.get((long)(timeout * 1000), TimeUnit.MILLISECONDS);
                                     }
                                     send(out, isResp, Resp.array(result), null);
                                 } catch (TimeoutException e) {
                                     bReq.future.cancel(true);
-                                    send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                                 } catch (Exception e) {
                                     bReq.future.cancel(true);
-                                    send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                                 }
                             }
                         } catch (NumberFormatException e) {
@@ -1494,22 +1494,22 @@ public class Carade {
                 case "RPOP":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
-                        if (entry == null) send(out, isResp, Resp.bulkString(null), "(nil)");
+                        if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                         else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                         else {
                             ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
-                            if (list.isEmpty()) send(out, isResp, Resp.bulkString(null), "(nil)");
+                            if (list.isEmpty()) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                             else {
                                 String val = cmd.equals("LPOP") ? list.pollFirst() : list.pollLast(); // poll is safe
                                 if (val != null) {
                                     aofHandler.log(cmd, key);
                                     if (list.isEmpty()) store.remove(key); // Remove empty list
                                     notifyWatchers(key);
-                                    send(out, isResp, Resp.bulkString(val), val);
+                                    send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
                                 } else {
-                                    send(out, isResp, Resp.bulkString(null), "(nil)");
+                                    send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                                 }
                             }
                         }
@@ -1519,28 +1519,30 @@ public class Carade {
                 case "LRANGE":
                     if (parts.size() < 4) send(out, isResp, Resp.error("usage: LRANGE key start stop"), "(error) usage: LRANGE key start stop");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                         else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                         else {
                             ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
                             int size = list.size(); // Approximate size
-                            int start = Integer.parseInt(parts.get(2));
-                            int end = Integer.parseInt(parts.get(3));
+                            int start = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                            int end = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
                             
                             if (start < 0) start += size;
                             if (end < 0) end += size;
                             if (start < 0) start = 0;
                             
-                            List<String> sub = new ArrayList<>();
+                            List<byte[]> sub = new ArrayList<>();
+                            List<String> subStr = new ArrayList<>();
                             if (start <= end) {
                                 Iterator<String> it = list.iterator();
                                 int idx = 0;
                                 while (it.hasNext() && idx <= end) {
                                     String s = it.next();
                                     if (idx >= start) {
-                                        sub.add(s);
+                                        sub.add(s.getBytes(StandardCharsets.UTF_8));
+                                        subStr.add(s);
                                     }
                                     idx++;
                                 }
@@ -1548,7 +1550,7 @@ public class Carade {
                             if (isResp) send(out, true, Resp.array(sub), null);
                             else {
                                 StringBuilder sb = new StringBuilder();
-                                for (int i = 0; i < sub.size(); i++) sb.append((i+1) + ") \"" + sub.get(i) + "\"\n");
+                                for (int i = 0; i < subStr.size(); i++) sb.append((i+1) + ") \"" + subStr.get(i) + "\"\n");
                                 send(out, false, null, sb.toString().trim());
                             }
                         }
@@ -1561,7 +1563,7 @@ public class Carade {
                         send(out, isResp, Resp.error("usage: HSET key field value [field value ...]"), "(error) usage: HSET key field value [field value ...]");
                     } else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         final int[] ret = {0}; // Number of fields added
                         try {
                             store.compute(key, (k, v) -> {
@@ -1576,8 +1578,8 @@ public class Carade {
                                 }
                                 
                                 for (int i = 2; i < parts.size(); i += 2) {
-                                    String field = parts.get(i);
-                                    String val = parts.get(i+1);
+                                    String field = new String(parts.get(i), StandardCharsets.UTF_8);
+                                    String val = new String(parts.get(i+1), StandardCharsets.UTF_8);
                                     if (map.put(field, val) == null) ret[0]++; 
                                 }
                                 
@@ -1587,7 +1589,7 @@ public class Carade {
                             
                             notifyWatchers(key);
                             String[] args = new String[parts.size()-1];
-                            for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
+                            for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
                             aofHandler.log("HSET", args);
                             
                             send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
@@ -1600,13 +1602,14 @@ public class Carade {
                 case "HGET":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: HGET key field"), "(error) usage: HGET key field");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
-                        if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.bulkString(null), "(nil)");
+                        if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                         else {
                             ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.value;
-                            String val = map.get(parts.get(2));
-                            send(out, isResp, Resp.bulkString(val), val != null ? val : "(nil)");
+                            String val = map.get(field);
+                            send(out, isResp, Resp.bulkString(val != null ? val.getBytes(StandardCharsets.UTF_8) : null), val != null ? val : "(nil)");
                         }
                     }
                     break;
@@ -1614,21 +1617,24 @@ public class Carade {
                 case "HGETALL":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: HGETALL key"), "(error) usage: HGETALL key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                         else {
                             ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.value;
-                            List<String> flat = new ArrayList<>();
+                            List<byte[]> flat = new ArrayList<>();
+                            List<String> flatStr = new ArrayList<>();
                             for (Map.Entry<String, String> e : map.entrySet()) {
-                                flat.add(e.getKey());
-                                flat.add(e.getValue());
+                                flat.add(e.getKey().getBytes(StandardCharsets.UTF_8));
+                                flat.add(e.getValue().getBytes(StandardCharsets.UTF_8));
+                                flatStr.add(e.getKey());
+                                flatStr.add(e.getValue());
                             }
                             if (isResp) send(out, true, Resp.array(flat), null);
                             else {
                                 StringBuilder sb2 = new StringBuilder();
-                                for (int i = 0; i < flat.size(); i++) {
-                                        sb2.append((i+1) + ") \"" + flat.get(i) + "\"\n");
+                                for (int i = 0; i < flatStr.size(); i++) {
+                                        sb2.append((i+1) + ") \"" + flatStr.get(i) + "\"\n");
                                 }
                                 send(out, false, null, sb2.toString().trim());
                             }
@@ -1639,8 +1645,8 @@ public class Carade {
                 case "HDEL":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: HDEL key field"), "(error) usage: HDEL key field");
                     else {
-                        String key = parts.get(1);
-                        String field = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         final int[] ret = {0};
                         store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.HASH) {
@@ -1662,11 +1668,11 @@ public class Carade {
                     if (parts.size() < 4) send(out, isResp, Resp.error("usage: HINCRBY key field increment"), "(error) usage: HINCRBY key field increment");
                     else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
-                        String field = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         final long[] ret = {0};
                         try {
-                            long incr = Long.parseLong(parts.get(3));
+                            long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
                             store.compute(key, (k, v) -> {
                                 if (v == null) {
                                     ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
@@ -1691,7 +1697,7 @@ public class Carade {
                                 }
                             });
                             notifyWatchers(key);
-                            aofHandler.log("HINCRBY", key, field, parts.get(3));
+                            aofHandler.log("HINCRBY", key, field, new String(parts.get(3), StandardCharsets.UTF_8));
                             send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                         } catch (NumberFormatException e) {
                                 send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
@@ -1709,8 +1715,8 @@ public class Carade {
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: SADD key member"), "(error) usage: SADD key member");
                     else {
                         performEvictionIfNeeded();
-                        String key = parts.get(1);
-                        String member = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(2), StandardCharsets.UTF_8);
                         final int[] ret = {0};
                         try {
                             store.compute(key, (k, v) -> {
@@ -1741,16 +1747,21 @@ public class Carade {
                 case "SMEMBERS":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: SMEMBERS key"), "(error) usage: SMEMBERS key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                         else {
                             Set<String> set = (Set<String>) entry.value;
-                            List<String> list = new ArrayList<>(set);
+                            List<byte[]> list = new ArrayList<>();
+                            List<String> listStr = new ArrayList<>();
+                            for(String s : set) {
+                                list.add(s.getBytes(StandardCharsets.UTF_8));
+                                listStr.add(s);
+                            }
                             if (isResp) send(out, true, Resp.array(list), null);
                             else {
                                 StringBuilder sb = new StringBuilder();
-                                for (int i = 0; i < list.size(); i++) sb.append((i+1) + ") \"" + list.get(i) + "\"\n");
+                                for (int i = 0; i < listStr.size(); i++) sb.append((i+1) + ") \"" + listStr.get(i) + "\"\n");
                                 send(out, false, null, sb.toString().trim());
                             }
                         }
@@ -1760,8 +1771,8 @@ public class Carade {
                 case "SREM":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: SREM key member"), "(error) usage: SREM key member");
                     else {
-                        String key = parts.get(1);
-                        String member = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(2), StandardCharsets.UTF_8);
                         final int[] ret = {0};
                         store.computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.SET) {
@@ -1782,8 +1793,8 @@ public class Carade {
                 case "SISMEMBER":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: SISMEMBER key member"), "(error) usage: SISMEMBER key member");
                     else {
-                        String key = parts.get(1);
-                        String member = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(2), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
                         else {
@@ -1796,7 +1807,7 @@ public class Carade {
                 case "SCARD":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: SCARD key"), "(error) usage: SCARD key");
                     else {
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
                         else {
@@ -1809,14 +1820,14 @@ public class Carade {
                 case "SINTER":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: SINTER key [key ...]"), "(error) usage: SINTER key [key ...]");
                     else {
-                        String firstKey = parts.get(1);
+                        String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(firstKey);
                         if (entry == null || entry.type != DataType.SET) {
                              send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                         } else {
                              Set<String> result = new HashSet<>((Set<String>) entry.value);
                              for (int i = 2; i < parts.size(); i++) {
-                                 ValueEntry e = store.get(parts.get(i));
+                                 ValueEntry e = store.get(new String(parts.get(i), StandardCharsets.UTF_8));
                                  if (e == null || e.type != DataType.SET) {
                                      result.clear();
                                      break;
@@ -1824,7 +1835,11 @@ public class Carade {
                                  result.retainAll((Set<String>) e.value);
                              }
                              
-                             if (isResp) send(out, true, Resp.array(new ArrayList<>(result)), null);
+                             if (isResp) {
+                                 List<byte[]> resp = new ArrayList<>();
+                                 for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
+                                 send(out, true, Resp.array(resp), null);
+                             }
                              else {
                                  StringBuilder sb = new StringBuilder();
                                  int i = 1;
@@ -1840,12 +1855,16 @@ public class Carade {
                     else {
                          Set<String> result = new HashSet<>();
                          for (int i = 1; i < parts.size(); i++) {
-                             ValueEntry e = store.get(parts.get(i));
+                             ValueEntry e = store.get(new String(parts.get(i), StandardCharsets.UTF_8));
                              if (e != null && e.type == DataType.SET) {
                                  result.addAll((Set<String>) e.value);
                              }
                          }
-                         if (isResp) send(out, true, Resp.array(new ArrayList<>(result)), null);
+                         if (isResp) {
+                             List<byte[]> resp = new ArrayList<>();
+                             for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
+                             send(out, true, Resp.array(resp), null);
+                         }
                          else {
                              StringBuilder sb = new StringBuilder();
                              int i = 1;
@@ -1858,7 +1877,7 @@ public class Carade {
                 case "SDIFF":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: SDIFF key [key ...]"), "(error) usage: SDIFF key [key ...]");
                     else {
-                        String firstKey = parts.get(1);
+                        String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(firstKey);
                         Set<String> result = new HashSet<>();
                         if (entry != null && entry.type == DataType.SET) {
@@ -1866,13 +1885,17 @@ public class Carade {
                         }
                         
                         for (int i = 2; i < parts.size(); i++) {
-                             ValueEntry e = store.get(parts.get(i));
+                             ValueEntry e = store.get(new String(parts.get(i), StandardCharsets.UTF_8));
                              if (e != null && e.type == DataType.SET) {
                                  result.removeAll((Set<String>) e.value);
                              }
                         }
                         
-                        if (isResp) send(out, true, Resp.array(new ArrayList<>(result)), null);
+                        if (isResp) {
+                             List<byte[]> resp = new ArrayList<>();
+                             for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
+                             send(out, true, Resp.array(resp), null);
+                        }
                         else {
                              StringBuilder sb = new StringBuilder();
                              int i = 1;
@@ -1885,7 +1908,7 @@ public class Carade {
                 case "DEL":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: DEL key"), "(error) usage: DEL key");
                     else { 
-                        String key = parts.get(1);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         ValueEntry prev = store.remove(key);
                         if (prev != null) {
                             notifyWatchers(key);
@@ -1901,7 +1924,7 @@ public class Carade {
                             send(out, isResp, Resp.error("usage: ZADD key score member [score member ...]"), "(error) usage: ZADD key score member ...");
                     } else {
                             performEvictionIfNeeded();
-                            String key = parts.get(1);
+                            String key = new String(parts.get(1), StandardCharsets.UTF_8);
                             final int[] addedCount = {0};
                             try {
                                 store.compute(key, (k, v) -> {
@@ -1917,8 +1940,8 @@ public class Carade {
                                     
                                     for (int i = 2; i < parts.size(); i += 2) {
                                         try {
-                                            double score = Double.parseDouble(parts.get(i));
-                                            String member = parts.get(i+1);
+                                            double score = Double.parseDouble(new String(parts.get(i), StandardCharsets.UTF_8));
+                                            String member = new String(parts.get(i+1), StandardCharsets.UTF_8);
                                             addedCount[0] += zset.add(score, member);
                                         } catch (Exception ex) {}
                                     }
@@ -1928,7 +1951,7 @@ public class Carade {
                                 
                                 notifyWatchers(key);
                                 String[] args = new String[parts.size()-1];
-                                for(int i=1; i<parts.size(); i++) args[i-1] = parts.get(i);
+                                for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
                                 aofHandler.log("ZADD", args);
                                 
                                 send(out, isResp, Resp.integer(addedCount[0]), "(integer) " + addedCount[0]);
@@ -1944,8 +1967,8 @@ public class Carade {
                 case "ZRANGE":
                     if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZRANGE key start stop [WITHSCORES]"), "(error) usage: ZRANGE key start stop [WITHSCORES]");
                     else {
-                        String key = parts.get(1);
-                        boolean withScores = parts.size() > 4 && parts.get(parts.size()-1).equalsIgnoreCase("WITHSCORES");
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        boolean withScores = parts.size() > 4 && new String(parts.get(parts.size()-1), StandardCharsets.UTF_8).equalsIgnoreCase("WITHSCORES");
                         
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.ZSET) {
@@ -1956,8 +1979,8 @@ public class Carade {
                             }
                         } else {
                             try {
-                                int start = Integer.parseInt(parts.get(2));
-                                int end = Integer.parseInt(parts.get(3));
+                                int start = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                                int end = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
                                 CaradeZSet zset = (CaradeZSet) entry.value;
                                 int size = zset.size();
                                 
@@ -1965,18 +1988,21 @@ public class Carade {
                                 if (end < 0) end += size;
                                 if (start < 0) start = 0;
                                 
-                                List<String> result = new ArrayList<>();
+                                List<byte[]> result = new ArrayList<>();
+                                List<String> resultStr = new ArrayList<>();
                                 if (start <= end) {
                                     Iterator<ZNode> it = zset.sorted.iterator();
                                     int idx = 0;
                                     while (it.hasNext() && idx <= end) {
                                         ZNode node = it.next();
                                         if (idx >= start) {
-                                            result.add(node.member);
+                                            result.add(node.member.getBytes(StandardCharsets.UTF_8));
+                                            resultStr.add(node.member);
                                             if (withScores) {
                                                 String s = String.valueOf(node.score);
                                                 if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
-                                                result.add(s);
+                                                result.add(s.getBytes(StandardCharsets.UTF_8));
+                                                resultStr.add(s);
                                             }
                                         }
                                         idx++;
@@ -1986,8 +2012,8 @@ public class Carade {
                                 if (isResp) send(out, true, Resp.array(result), null);
                                 else {
                                         StringBuilder sb = new StringBuilder();
-                                        for (int i = 0; i < result.size(); i++) {
-                                            sb.append((i+1) + ") \"" + result.get(i) + "\"\n");
+                                        for (int i = 0; i < resultStr.size(); i++) {
+                                            sb.append((i+1) + ") \"" + resultStr.get(i) + "\"\n");
                                         }
                                         send(out, false, null, sb.toString().trim());
                                 }
@@ -2002,8 +2028,8 @@ public class Carade {
                 case "ZREVRANGE":
                     if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZREVRANGE key start stop [WITHSCORES]"), "(error) usage: ZREVRANGE key start stop [WITHSCORES]");
                     else {
-                        String key = parts.get(1);
-                        boolean withScores = parts.size() > 4 && parts.get(parts.size()-1).equalsIgnoreCase("WITHSCORES");
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        boolean withScores = parts.size() > 4 && new String(parts.get(parts.size()-1), StandardCharsets.UTF_8).equalsIgnoreCase("WITHSCORES");
                         
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.ZSET) {
@@ -2011,8 +2037,8 @@ public class Carade {
                              else send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                         } else {
                             try {
-                                int start = Integer.parseInt(parts.get(2));
-                                int end = Integer.parseInt(parts.get(3));
+                                int start = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                                int end = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
                                 CaradeZSet zset = (CaradeZSet) entry.value;
                                 int size = zset.size();
                                 
@@ -2020,18 +2046,21 @@ public class Carade {
                                 if (end < 0) end += size;
                                 if (start < 0) start = 0;
                                 
-                                List<String> result = new ArrayList<>();
+                                List<byte[]> result = new ArrayList<>();
+                                List<String> resultStr = new ArrayList<>();
                                 if (start <= end) {
                                     Iterator<ZNode> it = zset.sorted.descendingIterator();
                                     int idx = 0;
                                     while (it.hasNext() && idx <= end) {
                                         ZNode node = it.next();
                                         if (idx >= start) {
-                                            result.add(node.member);
+                                            result.add(node.member.getBytes(StandardCharsets.UTF_8));
+                                            resultStr.add(node.member);
                                             if (withScores) {
                                                 String s = String.valueOf(node.score);
                                                 if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
-                                                result.add(s);
+                                                result.add(s.getBytes(StandardCharsets.UTF_8));
+                                                resultStr.add(s);
                                             }
                                         }
                                         idx++;
@@ -2041,8 +2070,8 @@ public class Carade {
                                 if (isResp) send(out, true, Resp.array(result), null);
                                 else {
                                         StringBuilder sb = new StringBuilder();
-                                        for (int i = 0; i < result.size(); i++) {
-                                            sb.append((i+1) + ") \"" + result.get(i) + "\"\n");
+                                        for (int i = 0; i < resultStr.size(); i++) {
+                                            sb.append((i+1) + ") \"" + resultStr.get(i) + "\"\n");
                                         }
                                         send(out, false, null, sb.toString().trim());
                                 }
@@ -2056,17 +2085,17 @@ public class Carade {
                 case "ZRANK":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: ZRANK key member"), "(error) usage: ZRANK key member");
                     else {
-                        String key = parts.get(1);
-                        String member = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(2), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                         if (entry == null || entry.type != DataType.ZSET) {
                                 if (entry != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                                else send(out, isResp, Resp.bulkString(null), "(nil)");
+                                else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                         } else {
                             CaradeZSet zset = (CaradeZSet) entry.value;
                             Double score = zset.score(member);
                             if (score == null) {
-                                send(out, isResp, Resp.bulkString(null), "(nil)");
+                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                             } else {
                                 // O(N) scan
                                 int rank = 0;
@@ -2083,8 +2112,8 @@ public class Carade {
                 case "ZREM":
                      if (parts.size() < 3) send(out, isResp, Resp.error("usage: ZREM key member"), "(error) usage: ZREM key member");
                      else {
-                         String key = parts.get(1);
-                         String member = parts.get(2);
+                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                         String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          final int[] ret = {0};
                          store.computeIfPresent(key, (k, v) -> {
                              if (v.type == DataType.ZSET) {
@@ -2109,20 +2138,20 @@ public class Carade {
                 case "ZSCORE":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: ZSCORE key member"), "(error) usage: ZSCORE key member");
                     else {
-                        String key = parts.get(1);
-                        String member = parts.get(2);
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(2), StandardCharsets.UTF_8);
                         ValueEntry entry = store.get(key);
                          if (entry == null || entry.type != DataType.ZSET) {
                              if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                             else send(out, isResp, Resp.bulkString(null), "(nil)");
+                             else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                          } else {
                              CaradeZSet zset = (CaradeZSet) entry.value;
                              Double score = zset.score(member);
-                             if (score == null) send(out, isResp, Resp.bulkString(null), "(nil)");
+                             if (score == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                              else {
                                  String s = String.valueOf(score);
                                  if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
-                                 send(out, isResp, Resp.bulkString(s), s);
+                                 send(out, isResp, Resp.bulkString(s.getBytes(StandardCharsets.UTF_8)), s);
                              }
                          }
                     }
@@ -2133,11 +2162,14 @@ public class Carade {
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: SUBSCRIBE channel"), "(error) usage: SUBSCRIBE channel");
                     else {
                         for (int i = 1; i < parts.size(); i++) {
-                            String channel = parts.get(i);
+                            String channel = new String(parts.get(i), StandardCharsets.UTF_8);
                             pubSub.subscribe(channel, this);
                             isSubscribed = true;
                             if (isResp) {
-                                List<String> resp = Arrays.asList("subscribe", channel, "1"); // Actually 3rd arg is count of subscriptions
+                                List<byte[]> resp = new ArrayList<>();
+                                resp.add("subscribe".getBytes(StandardCharsets.UTF_8));
+                                resp.add(channel.getBytes(StandardCharsets.UTF_8));
+                                resp.add("1".getBytes(StandardCharsets.UTF_8));
                                 send(out, true, Resp.array(resp), null);
                             } else {
                                 send(out, false, null, "Subscribed to channel: " + channel);
@@ -2152,14 +2184,26 @@ public class Carade {
                         pubSub.unsubscribeAll(this);
                         if (isSubscribed) {
                             isSubscribed = false; 
-                            if (isResp) send(out, true, Resp.array(Arrays.asList("unsubscribe", null, "0")), null);
+                            if (isResp) {
+                                List<byte[]> resp = new ArrayList<>();
+                                resp.add("unsubscribe".getBytes(StandardCharsets.UTF_8));
+                                resp.add(null);
+                                resp.add("0".getBytes(StandardCharsets.UTF_8));
+                                send(out, true, Resp.array(resp), null);
+                            }
                             else send(out, false, null, "Unsubscribed from all");
                         }
                     } else {
                         for (int i = 1; i < parts.size(); i++) {
-                            String channel = parts.get(i);
+                            String channel = new String(parts.get(i), StandardCharsets.UTF_8);
                             pubSub.unsubscribe(channel, this);
-                            if (isResp) send(out, true, Resp.array(Arrays.asList("unsubscribe", channel, "0")), null); 
+                            if (isResp) {
+                                List<byte[]> resp = new ArrayList<>();
+                                resp.add("unsubscribe".getBytes(StandardCharsets.UTF_8));
+                                resp.add(channel.getBytes(StandardCharsets.UTF_8));
+                                resp.add("0".getBytes(StandardCharsets.UTF_8));
+                                send(out, true, Resp.array(resp), null);
+                            }
                             else send(out, false, null, "Unsubscribed from: " + channel);
                         }
                     }
@@ -2169,11 +2213,14 @@ public class Carade {
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: PSUBSCRIBE pattern"), "(error) usage: PSUBSCRIBE pattern");
                     else {
                         for (int i = 1; i < parts.size(); i++) {
-                            String pattern = parts.get(i);
+                            String pattern = new String(parts.get(i), StandardCharsets.UTF_8);
                             pubSub.psubscribe(pattern, this);
                             isSubscribed = true;
                             if (isResp) {
-                                List<String> resp = Arrays.asList("psubscribe", pattern, "1");
+                                List<byte[]> resp = new ArrayList<>();
+                                resp.add("psubscribe".getBytes(StandardCharsets.UTF_8));
+                                resp.add(pattern.getBytes(StandardCharsets.UTF_8));
+                                resp.add("1".getBytes(StandardCharsets.UTF_8));
                                 send(out, true, Resp.array(resp), null);
                             } else {
                                 send(out, false, null, "Subscribed to pattern: " + pattern);
@@ -2186,9 +2233,15 @@ public class Carade {
                     // Simplified implementation
                     if (parts.size() >= 2) {
                             for (int i = 1; i < parts.size(); i++) {
-                            String pattern = parts.get(i);
+                            String pattern = new String(parts.get(i), StandardCharsets.UTF_8);
                             pubSub.punsubscribe(pattern, this);
-                            if (isResp) send(out, true, Resp.array(Arrays.asList("punsubscribe", pattern, "0")), null); 
+                            if (isResp) {
+                                List<byte[]> resp = new ArrayList<>();
+                                resp.add("punsubscribe".getBytes(StandardCharsets.UTF_8));
+                                resp.add(pattern.getBytes(StandardCharsets.UTF_8));
+                                resp.add("0".getBytes(StandardCharsets.UTF_8));
+                                send(out, true, Resp.array(resp), null);
+                            } 
                             else send(out, false, null, "Unsubscribed from pattern: " + pattern);
                             }
                     }
@@ -2197,8 +2250,8 @@ public class Carade {
                 case "PUBLISH":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: PUBLISH channel message"), "(error) usage: PUBLISH channel message");
                     else {
-                        String channel = parts.get(1);
-                        String msg = parts.get(2);
+                        String channel = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String msg = new String(parts.get(2), StandardCharsets.UTF_8);
                         int count = pubSub.publish(channel, msg);
                         send(out, isResp, Resp.integer(count), "(integer) " + count);
                     }
@@ -2222,7 +2275,7 @@ public class Carade {
                     info.append("\n# Persistence\n");
                     info.append("aof_enabled:1\n");
                     
-                    if (isResp) send(out, true, Resp.bulkString(info.toString()), null);
+                    if (isResp) send(out, true, Resp.bulkString(info.toString().getBytes(StandardCharsets.UTF_8)), null);
                     else send(out, false, null, info.toString());
                     break;
                 case "DBSIZE": send(out, isResp, Resp.integer(store.size()), "(integer) " + store.size()); break;
