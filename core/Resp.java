@@ -24,8 +24,24 @@ public class Resp {
     public static String integer(long i) { return ":" + i + "\r\n"; }
     public static String bulkString(String s) { 
         if (s == null) return "$-1\r\n";
-        return "$" + s.length() + "\r\n" + s + "\r\n";
+        byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return "$" + b.length + "\r\n" + s + "\r\n";
     }
+    
+    public static byte[] bulkStringBytes(byte[] b) {
+        if (b == null) return "$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            String header = "$" + b.length + "\r\n";
+            bos.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            bos.write(b);
+            bos.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return bos.toByteArray();
+        } catch (IOException e) { return null; }
+    }
+    
+    // Helper to allow writing bytes directly would be better, but requires changing callers.
+    // For this specific task, we will try to handle it.
     public static String array(List<String> list) {
         if (list == null) return "*-1\r\n";
         StringBuilder sb = new StringBuilder();

@@ -6,6 +6,9 @@ public class AofHandler {
     private final String filename;
     private PrintWriter writer;
     private final ScheduledExecutorService flusher;
+    // Buffer for commands received during rewrite
+    private final ConcurrentLinkedQueue<String> rewriteBuffer = new ConcurrentLinkedQueue<>();
+    private volatile boolean isRewriting = false;
     
     public AofHandler(String filename) {
         this.filename = filename;
@@ -27,13 +30,18 @@ public class AofHandler {
     }
 
     public synchronized void log(String cmd, String... args) {
-        if (writer == null) return;
         List<String> parts = new ArrayList<>();
         parts.add(cmd);
         parts.addAll(Arrays.asList(args));
         String resp = Resp.array(parts);
-        writer.print(resp);
-        // No flush here!
+        
+        if (writer != null) {
+            writer.print(resp);
+        }
+        
+        if (isRewriting) {
+            rewriteBuffer.add(resp);
+        }
     }
 
     private synchronized void flush() {
@@ -42,9 +50,17 @@ public class AofHandler {
         }
     }
 
-    public synchronized void rewrite(Map<String, Carade.ValueEntry> store) {
+    public void rewrite(Map<String, Carade.ValueEntry> store) {
+        isRewriting = true;
+        rewriteBuffer.clear();
+        
         String tempFile = filename + ".tmp";
-        try (PrintWriter tempWriter = new PrintWriter(new BufferedWriter(new FileWriter(tempFile)))) {
+        // Use a flag to track if we should try to rename. 
+        // We cannot rely on try-with-resources to close BEFORE we rename inside the block.
+        // So we must structure it differently.
+        PrintWriter tempWriter = null;
+        try {
+            tempWriter = new PrintWriter(new BufferedWriter(new FileWriter(tempFile)));
             for (Map.Entry<String, Carade.ValueEntry> entry : store.entrySet()) {
                 String key = entry.getKey();
                 Carade.ValueEntry val = entry.getValue();
@@ -52,7 +68,7 @@ public class AofHandler {
 
                 // Reconstruct commands based on type
                 if (val.type == Carade.DataType.STRING) {
-                     String v = (String) val.value;
+                     String v = new String((byte[]) val.value, java.nio.charset.StandardCharsets.UTF_8);
                      // Expiry logic? If it has expiry, we should preserve it.
                      // Current Carade.ValueEntry stores expireAt (absolute time).
                      // SET key value EX ttl
@@ -92,35 +108,51 @@ public class AofHandler {
                     }
                 }
             }
-            tempWriter.flush();
+            
+            // Append commands that happened during rewrite
+            // We need to lock briefly to ensure we get the last commands and stop buffering
+            synchronized(this) {
+                for (String cmd : rewriteBuffer) {
+                    tempWriter.print(cmd);
+                }
+                tempWriter.flush();
+                isRewriting = false;
+                rewriteBuffer.clear();
+                
+                // Close the temp writer explicitly BEFORE rename
+                tempWriter.close();
+                tempWriter = null;
+
+                // Now swap files inside the lock to prevent new logs from being lost/split badly
+                // Close current writer to release lock/handle
+                if (writer != null) {
+                    writer.flush();
+                    writer.close();
+                }
+
+                File temp = new File(tempFile);
+                File dest = new File(filename);
+                if (dest.exists()) dest.delete();
+                
+                if (temp.renameTo(dest)) {
+                     System.out.println("✅ AOF Rewrite successful.");
+                } else {
+                     System.err.println("⚠️ AOF Rewrite failed to rename temp file.");
+                }
+                
+                // Re-open
+                try {
+                   this.writer = new PrintWriter(new BufferedWriter(new FileWriter(filename, true)));
+                } catch (IOException e) {
+                    System.err.println("⚠️ FATAL: Could not re-open AOF: " + e.getMessage());
+                }
+            }
+            
         } catch (IOException e) {
             System.err.println("⚠️ AOF Rewrite failed: " + e.getMessage());
-            return;
-        }
-
-        // Atomic Rename (Linux)
-        // Close current writer to release lock/handle
-        close();
-        
-        File temp = new File(tempFile);
-        File dest = new File(filename);
-        if (dest.exists()) dest.delete();
-        if (temp.renameTo(dest)) {
-             System.out.println("✅ AOF Rewrite successful.");
-             // Re-open
-             try {
-                this.writer = new PrintWriter(new BufferedWriter(new FileWriter(filename, true)));
-             } catch (IOException e) {
-                 System.err.println("⚠️ Could not re-open AOF after rewrite: " + e.getMessage());
-             }
-        } else {
-             System.err.println("⚠️ AOF Rewrite failed to rename temp file.");
-             // Try to re-open original
-             try {
-                this.writer = new PrintWriter(new BufferedWriter(new FileWriter(filename, true)));
-             } catch (IOException e) {
-                 System.err.println("⚠️ FATAL: Could not re-open AOF: " + e.getMessage());
-             }
+            isRewriting = false;
+        } finally {
+            if (tempWriter != null) tempWriter.close();
         }
     }
     

@@ -5,7 +5,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Project: Carade
@@ -95,7 +95,7 @@ public class Carade {
     }
 
     private static ConcurrentHashMap<String, ValueEntry> store = new ConcurrentHashMap<>();
-    private static final ReentrantLock globalLock = new ReentrantLock();
+    private static final ReentrantReadWriteLock globalRWLock = new ReentrantReadWriteLock();
     private static AofHandler aofHandler;
 
     // --- BLOCKING QUEUES ---
@@ -285,7 +285,7 @@ public class Carade {
                         if (parts.size() >= 5 && parts.get(3).equalsIgnoreCase("EX")) {
                             try { ttl = Long.parseLong(parts.get(4)); } catch (Exception e) {}
                         }
-                        store.put(parts.get(1), new ValueEntry(parts.get(2), DataType.STRING, ttl));
+                        store.put(parts.get(1), new ValueEntry(parts.get(2).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, ttl));
                     }
                     break;
                 case "DEL":
@@ -352,7 +352,7 @@ public class Carade {
                             if (i + 1 < parts.size()) {
                                 String key = parts.get(i);
                                 String val = parts.get(i+1);
-                                store.put(key, new ValueEntry(val, DataType.STRING, -1));
+                                store.put(key, new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
                             }
                         }
                     }
@@ -438,13 +438,13 @@ public class Carade {
                                 val = 0;
                             } else if (v.type == DataType.STRING) {
                                 try {
-                                    val = Long.parseLong((String)v.value);
+                                    val = Long.parseLong(new String((byte[])v.value, java.nio.charset.StandardCharsets.UTF_8));
                                 } catch (Exception e) { return v; } 
                             } else {
                                 return v;
                             }
                             if (cmd.equals("INCR")) val++; else val--;
-                            ValueEntry newV = new ValueEntry(String.valueOf(val), DataType.STRING, -1);
+                            ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1);
                             if (v != null) newV.expireAt = v.expireAt;
                             return newV;
                         });
@@ -503,7 +503,11 @@ public class Carade {
                 
                 switch (v.type) {
                     case STRING:
-                        writeString(dos, (String) v.value);
+                        // writeString expects String, but now we store byte[]
+                        // Ideally we should write bytes directly
+                        byte[] b = (byte[]) v.value;
+                        dos.writeInt(b.length);
+                        dos.write(b);
                         break;
                     case LIST:
                         ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
@@ -578,7 +582,14 @@ public class Carade {
                     
                     if (typeCode == 0) {
                         type = DataType.STRING;
-                        value = readString(dis);
+                        // For string type, we now store byte[]
+                        // readString returns String, so we getBytes() or modify readString to return bytes.
+                        // readString logic: readInt len, read bytes, new String(bytes, UTF-8).
+                        // We can just reuse readString and convert back to bytes, 
+                        // or better, implement readBytes.
+                        // But since we want to be minimal with changes:
+                        String s = readString(dis);
+                        value = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                     } else if (typeCode == 1) {
                         type = DataType.LIST;
                         int size = dis.readInt();
@@ -638,9 +649,14 @@ public class Carade {
                     String key = (String) entry.getKey();
                     Object val = entry.getValue();
                     if (val instanceof String) {
-                        store.put(key, new ValueEntry((String) val, DataType.STRING, -1));
+                        store.put(key, new ValueEntry(((String) val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
                     } else if (val instanceof ValueEntry) {
-                        store.put(key, (ValueEntry) val);
+                        // We might need to migrate ValueEntry content if it was String inside
+                        ValueEntry ve = (ValueEntry) val;
+                        if (ve.type == DataType.STRING && ve.value instanceof String) {
+                            ve.value = ((String) ve.value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        }
+                        store.put(key, ve);
                     }
                 }
                 System.out.println("📂 Loaded " + store.size() + " keys (Legacy).");
@@ -668,11 +684,26 @@ public class Carade {
 
         private synchronized void send(OutputStream out, boolean isResp, String respData, String textData) {
             try {
-                if (isResp) out.write(respData.getBytes());
-                else out.write((textData + "\n").getBytes());
+                if (isResp) {
+                     if (respData != null) out.write(respData.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                else out.write((textData + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 out.flush();
             } catch (IOException e) {
                 // Ignore, connection likely closed
+            }
+        }
+        
+        // Helper for binary safe send
+        private synchronized void sendBytes(OutputStream out, boolean isResp, byte[] respData, String textData) {
+             try {
+                if (isResp) {
+                     if (respData != null) out.write(respData);
+                } else {
+                     if (textData != null) out.write((textData + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                out.flush();
+            } catch (IOException e) {
             }
         }
 
@@ -782,7 +813,8 @@ public class Carade {
                                 if (transactionQueue.isEmpty()) {
                                     send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                                 } else {
-                                    globalLock.lock();
+                                    // Acquire write lock to ensure exclusive execution
+                                    globalRWLock.writeLock().lock();
                                     try {
                                         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
                                         // Write array header
@@ -795,7 +827,7 @@ public class Carade {
                                         out.write(buffer.toByteArray());
                                         out.flush();
                                     } finally {
-                                        globalLock.unlock();
+                                        globalRWLock.writeLock().unlock();
                                     }
                                 }
                             }
@@ -808,12 +840,13 @@ public class Carade {
                             continue;
                         }
 
-                        // Acquire lock for normal commands to ensure atomicity against EXEC
-                        globalLock.lock();
+                        // Acquire read lock for normal commands to ensure they don't run during EXEC,
+                        // but allow concurrent execution with other normal commands.
+                        globalRWLock.readLock().lock();
                         try {
                             executeCommand(parts, out, isResp);
                         } finally {
-                            globalLock.unlock();
+                            globalRWLock.readLock().unlock();
                         }
                         
                         if (cmd.equals("QUIT")) return;
@@ -865,7 +898,7 @@ public class Carade {
                         if (parts.size() >= 5 && parts.get(3).equalsIgnoreCase("EX")) {
                             try { ttl = Long.parseLong(parts.get(4)); } catch (Exception e) {}
                         }
-                        store.put(parts.get(1), new ValueEntry(val, DataType.STRING, ttl));
+                        store.put(parts.get(1), new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, ttl));
                         if (ttl > 0) aofHandler.log("SET", key, val, "EX", String.valueOf(ttl));
                         else aofHandler.log("SET", key, val);
                         
@@ -881,7 +914,7 @@ public class Carade {
                         for (int i = 1; i < parts.size(); i += 2) {
                             String key = parts.get(i);
                             String val = parts.get(i + 1);
-                            store.put(key, new ValueEntry(val, DataType.STRING, -1));
+                            store.put(key, new ValueEntry(val.getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
                         }
                         if (aofHandler != null) {
                             String[] logArgs = new String[parts.size() - 1];
@@ -903,8 +936,8 @@ public class Carade {
                             if (entry.type != DataType.STRING && entry.type != null) {
                                 send(out, isResp, Resp.error("WRONGTYPE Operation against a key holding the wrong kind of value"), "(error) WRONGTYPE");
                             } else {
-                                String v = (String) entry.value;
-                                send(out, isResp, Resp.bulkString(v), v.contains(" ") ? "\"" + v + "\"" : v);
+                                byte[] v = (byte[]) entry.value;
+                                sendBytes(out, isResp, Resp.bulkStringBytes(v), new String(v, java.nio.charset.StandardCharsets.UTF_8));
                             }
                         }
                     }
@@ -914,25 +947,38 @@ public class Carade {
                     if (parts.size() < 2) {
                         send(out, isResp, Resp.error("wrong number of arguments for 'mget' command"), "(error) wrong number of arguments for 'mget' command");
                     } else {
-                        List<String> results = new ArrayList<>();
-                        for (int i = 1; i < parts.size(); i++) {
-                            String key = parts.get(i);
-                            ValueEntry entry = store.get(key);
-                            if (entry == null) {
-                                results.add(null);
-                            } else if (entry.isExpired()) {
-                                store.remove(key);
-                                results.add(null);
-                            } else if (entry.type != DataType.STRING) {
-                                results.add(null);
-                            } else {
-                                entry.touch();
-                                results.add((String) entry.value);
-                            }
-                        }
                         if (isResp) {
-                            send(out, true, Resp.array(results), null);
+                            // Specialized path for binary-safe MGET in RESP mode
+                            try {
+                                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                                bos.write(("*"+(parts.size()-1)+"\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                for (int i = 1; i < parts.size(); i++) {
+                                    String key = parts.get(i);
+                                    ValueEntry entry = store.get(key);
+                                    if (entry == null || entry.isExpired() || entry.type != DataType.STRING) {
+                                        if (entry != null && entry.isExpired()) store.remove(key);
+                                        bos.write("$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                    } else {
+                                        entry.touch();
+                                        bos.write(Resp.bulkStringBytes((byte[]) entry.value));
+                                    }
+                                }
+                                sendBytes(out, true, bos.toByteArray(), null);
+                            } catch (IOException e) {}
                         } else {
+                            // Text mode fallback (not binary safe)
+                            List<String> results = new ArrayList<>();
+                            for (int i = 1; i < parts.size(); i++) {
+                                String key = parts.get(i);
+                                ValueEntry entry = store.get(key);
+                                if (entry == null || entry.isExpired() || entry.type != DataType.STRING) {
+                                    if (entry != null && entry.isExpired()) store.remove(key);
+                                    results.add(null);
+                                } else {
+                                    entry.touch();
+                                    results.add(new String((byte[]) entry.value, java.nio.charset.StandardCharsets.UTF_8));
+                                }
+                            }
                             StringBuilder sb = new StringBuilder();
                             for (int i = 0; i < results.size(); i++) {
                                 String val = results.get(i);
@@ -1021,7 +1067,7 @@ public class Carade {
                                     throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
                                 } else {
                                     try {
-                                        val = Long.parseLong((String)v.value);
+                                        val = Long.parseLong(new String((byte[])v.value, java.nio.charset.StandardCharsets.UTF_8));
                                     } catch (NumberFormatException e) {
                                         throw new RuntimeException("ERR value is not an integer or out of range");
                                     }
@@ -1030,7 +1076,7 @@ public class Carade {
                                 if (cmd.equals("INCR")) val++; else val--;
                                 ret[0] = val;
                                 
-                                ValueEntry newV = new ValueEntry(String.valueOf(val), DataType.STRING, -1);
+                                ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1);
                                 if (v != null) newV.expireAt = v.expireAt;
                                 newV.touch();
                                 return newV;
