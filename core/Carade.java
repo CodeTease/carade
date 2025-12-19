@@ -68,6 +68,13 @@ public class Carade {
          Double score(String member) { return scores.get(member); }
          
          int size() { return scores.size(); }
+
+         double incrBy(double increment, String member) {
+             Double oldScore = scores.get(member);
+             double newScore = (oldScore == null ? 0 : oldScore) + increment;
+             add(newScore, member);
+             return newScore;
+         }
     }
 
     static class ValueEntry implements Serializable {
@@ -93,6 +100,20 @@ public class Carade {
     private static ConcurrentHashMap<String, ValueEntry> store = new ConcurrentHashMap<>();
     private static final ReentrantReadWriteLock globalRWLock = new ReentrantReadWriteLock();
     private static AofHandler aofHandler;
+    
+    // --- SCAN ENGINE ---
+    static class ScanCursor {
+        final Iterator<?> iterator;
+        final DataType type; // For verification if needed, or context
+        volatile long lastAccess;
+        ScanCursor(Iterator<?> iterator, DataType type) {
+            this.iterator = iterator;
+            this.type = type;
+            this.lastAccess = System.currentTimeMillis();
+        }
+    }
+    private static final ConcurrentHashMap<String, ScanCursor> scanRegistry = new ConcurrentHashMap<>();
+    private static final AtomicLong cursorIdGen = new AtomicLong(1);
 
     // --- WATCH / TRANSACTIONS ---
     private static final ConcurrentHashMap<String, Set<ClientHandler>> watchers = new ConcurrentHashMap<>();
@@ -190,6 +211,7 @@ public class Carade {
                 try {
                     Thread.sleep(30000); 
                     cleanupExpiredKeys(); 
+                    cleanupExpiredCursors();
                     saveData();
                 } catch (InterruptedException e) { break; }
             }
@@ -410,6 +432,28 @@ public class Carade {
                         } catch (Exception e) {}
                     }
                     break;
+                case "ZINCRBY":
+                    if (parts.size() >= 4) {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        try {
+                             double incr = Double.parseDouble(new String(parts.get(2), StandardCharsets.UTF_8));
+                             String member = new String(parts.get(3), StandardCharsets.UTF_8);
+                             store.compute(key, (k, v) -> {
+                                 CaradeZSet zset;
+                                 if (v == null) {
+                                     zset = new CaradeZSet();
+                                     v = new ValueEntry(zset, DataType.ZSET, -1);
+                                 } else if (v.type == DataType.ZSET) {
+                                     zset = (CaradeZSet)v.value;
+                                 } else {
+                                     return v;
+                                 }
+                                 zset.incrBy(incr, member);
+                                 return v;
+                             });
+                        } catch (Exception e) {}
+                    }
+                    break;
                 case "MSET":
                     if (parts.size() >= 3) {
                         for (int i = 1; i < parts.size(); i += 2) {
@@ -573,6 +617,11 @@ public class Carade {
             }
         }
         if (removed > 0) System.out.println("🧹 [GC] Vacuumed " + removed + " expired keys.");
+    }
+    
+    private static void cleanupExpiredCursors() {
+        long now = System.currentTimeMillis();
+        scanRegistry.entrySet().removeIf(e -> (now - e.getValue().lastAccess) > 600000); // 10 mins
     }
 
     private static void saveData() {
@@ -1008,6 +1057,128 @@ public class Carade {
                 activeConnections.decrementAndGet();
             }
         }
+        private void handleScan(List<byte[]> parts, OutputStream out, boolean isResp, String cmd, String key) throws IOException {
+             // Parse generic args: cursor [MATCH pattern] [COUNT count]
+             // For SCAN: parts[1] is cursor.
+             // For XSCAN: parts[2] is cursor.
+             int cursorIdx = cmd.equals("SCAN") ? 1 : 2;
+             if (parts.size() <= cursorIdx) {
+                 send(out, isResp, Resp.error("wrong number of arguments for '" + cmd.toLowerCase() + "' command"), "(error) wrong number of arguments");
+                 return;
+             }
+             
+             String cursor = new String(parts.get(cursorIdx), StandardCharsets.UTF_8);
+             String pattern = null;
+             int count = 10;
+             
+             for (int i = cursorIdx + 1; i < parts.size(); i++) {
+                 String arg = new String(parts.get(i), StandardCharsets.UTF_8).toUpperCase();
+                 if (arg.equals("MATCH") && i + 1 < parts.size()) {
+                     pattern = new String(parts.get(++i), StandardCharsets.UTF_8);
+                 } else if (arg.equals("COUNT") && i + 1 < parts.size()) {
+                     try { count = Integer.parseInt(new String(parts.get(++i), StandardCharsets.UTF_8)); } catch (Exception e) {}
+                 }
+             }
+             
+             java.util.regex.Pattern regex = null;
+             if (pattern != null) {
+                 String r = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+                 regex = java.util.regex.Pattern.compile(r);
+             }
+             
+             Iterator<?> it;
+             ScanCursor sc = null;
+             
+             if (cursor.equals("0")) {
+                 // New iterator
+                 if (cmd.equals("SCAN")) {
+                     it = store.keySet().iterator();
+                 } else {
+                     ValueEntry entry = store.get(key);
+                     if (entry == null) {
+                         send(out, isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
+                         return;
+                     }
+                     if (cmd.equals("HSCAN") && entry.type == DataType.HASH) {
+                         it = ((ConcurrentHashMap<String, String>)entry.value).entrySet().iterator();
+                     } else if (cmd.equals("SSCAN") && entry.type == DataType.SET) {
+                         it = ((Set<String>)entry.value).iterator();
+                     } else if (cmd.equals("ZSCAN") && entry.type == DataType.ZSET) {
+                         it = ((CaradeZSet)entry.value).scores.entrySet().iterator();
+                     } else {
+                         // Empty or wrong type
+                         send(out, isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
+                         return;
+                     }
+                 }
+                 sc = new ScanCursor(it, null); // Type check handled above
+                 String newCursor = String.valueOf(cursorIdGen.getAndIncrement());
+                 scanRegistry.put(newCursor, sc);
+                 cursor = newCursor;
+             } else {
+                 sc = scanRegistry.get(cursor);
+                 if (sc == null) {
+                      // Cursor not found (expired or invalid). Redis behavior: return 0 and empty list.
+                      cursor = "0";
+                      it = Collections.emptyIterator();
+                 } else {
+                      it = sc.iterator;
+                      sc.lastAccess = System.currentTimeMillis();
+                 }
+             }
+             
+             List<byte[]> results = new ArrayList<>();
+             int found = 0;
+             while (it.hasNext() && found < count) {
+                 Object next = it.next();
+                 found++; // Count raw elements processed
+                 
+                 String k = null;
+                 List<byte[]> entryBytes = new ArrayList<>();
+                 
+                 if (cmd.equals("SCAN") || cmd.equals("SSCAN")) {
+                     k = (String) next;
+                     if (regex == null || regex.matcher(k).matches()) {
+                         results.add(k.getBytes(StandardCharsets.UTF_8));
+                     }
+                 } else if (cmd.equals("HSCAN")) {
+                     Map.Entry<String, String> e = (Map.Entry<String, String>) next;
+                     if (regex == null || regex.matcher(e.getKey()).matches()) {
+                         results.add(e.getKey().getBytes(StandardCharsets.UTF_8));
+                         results.add(e.getValue().getBytes(StandardCharsets.UTF_8));
+                     }
+                 } else if (cmd.equals("ZSCAN")) {
+                     Map.Entry<String, Double> e = (Map.Entry<String, Double>) next;
+                     if (regex == null || regex.matcher(e.getKey()).matches()) {
+                         results.add(e.getKey().getBytes(StandardCharsets.UTF_8));
+                         String s = String.valueOf(e.getValue());
+                         if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
+                         results.add(s.getBytes(StandardCharsets.UTF_8));
+                     }
+                 }
+             }
+             
+             if (!it.hasNext()) {
+                 scanRegistry.remove(cursor);
+                 cursor = "0";
+             }
+             
+             if (isResp) {
+                 List<byte[]> outer = new ArrayList<>();
+                 outer.add(cursor.getBytes(StandardCharsets.UTF_8));
+                 outer.add(Resp.array(results));
+                 send(out, true, Resp.array(outer), null);
+             } else {
+                 // Simple text representation
+                 StringBuilder sb = new StringBuilder();
+                 sb.append("1) \"").append(cursor).append("\"\n");
+                 sb.append("2) ");
+                 for (int i=0; i<results.size(); i++) {
+                     sb.append(i==0 ? "" : "\n   ").append(i+1).append(") \"").append(new String(results.get(i), StandardCharsets.UTF_8)).append("\"");
+                 }
+                 send(out, false, null, sb.toString());
+             }
+        }
         
         // Extracted command execution logic
         private void executeCommand(List<byte[]> parts, OutputStream out, boolean isResp) throws IOException {
@@ -1015,6 +1186,21 @@ public class Carade {
             // Notify watchers for modification commands
             
             switch (cmd) {
+                // --- SCAN COMMANDS ---
+                case "SCAN":
+                    handleScan(parts, out, isResp, "SCAN", null);
+                    break;
+                case "HSCAN":
+                case "SSCAN":
+                case "ZSCAN":
+                    if (parts.size() < 2) {
+                        send(out, isResp, Resp.error("usage: " + cmd + " key cursor [MATCH pattern] [COUNT count]"), "(error) usage: " + cmd + " key cursor ...");
+                    } else {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        handleScan(parts, out, isResp, cmd, key);
+                    }
+                    break;
+
                 case "AUTH":
                     if (parts.size() < 2) send(out, isResp, Resp.error("usage: AUTH [user] password"), "(error) usage: AUTH [user] password");
                     else {
@@ -2135,6 +2321,91 @@ public class Carade {
                      }
                      break;
                 
+                case "ZINCRBY":
+                    if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZINCRBY key increment member"), "(error) usage: ZINCRBY key increment member");
+                    else {
+                        performEvictionIfNeeded();
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String member = new String(parts.get(3), StandardCharsets.UTF_8);
+                        final double[] ret = {0.0};
+                        try {
+                            double incr = Double.parseDouble(new String(parts.get(2), StandardCharsets.UTF_8));
+                            store.compute(key, (k, v) -> {
+                                CaradeZSet zset;
+                                if (v == null) {
+                                    zset = new CaradeZSet();
+                                    v = new ValueEntry(zset, DataType.ZSET, -1);
+                                } else if (v.type != DataType.ZSET) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    zset = (CaradeZSet) v.value;
+                                }
+                                ret[0] = zset.incrBy(incr, member);
+                                v.touch();
+                                return v;
+                            });
+                            notifyWatchers(key);
+                            aofHandler.log("ZINCRBY", key, String.valueOf(incr), member);
+                            
+                            String s = String.valueOf(ret[0]);
+                            if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
+                            send(out, isResp, Resp.bulkString(s.getBytes(StandardCharsets.UTF_8)), s);
+                        } catch (NumberFormatException e) {
+                            send(out, isResp, Resp.error("ERR value is not a valid float"), "(error) ERR value is not a valid float");
+                        } catch (RuntimeException e) {
+                            String msg = e.getMessage();
+                            if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
+                                send(out, isResp, Resp.error(msg), "(error) " + msg);
+                            else throw e;
+                        }
+                    }
+                    break;
+
+                case "ZCARD":
+                    if (parts.size() < 2) send(out, isResp, Resp.error("usage: ZCARD key"), "(error) usage: ZCARD key");
+                    else {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        ValueEntry entry = store.get(key);
+                        if (entry == null || entry.type != DataType.ZSET) {
+                            if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                            else send(out, isResp, Resp.integer(0), "(integer) 0");
+                        } else {
+                            CaradeZSet zset = (CaradeZSet) entry.value;
+                            send(out, isResp, Resp.integer(zset.size()), "(integer) " + zset.size());
+                        }
+                    }
+                    break;
+
+                case "ZCOUNT":
+                    if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZCOUNT key min max"), "(error) usage: ZCOUNT key min max");
+                    else {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        ValueEntry entry = store.get(key);
+                        if (entry == null || entry.type != DataType.ZSET) {
+                             if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                             else send(out, isResp, Resp.integer(0), "(integer) 0");
+                        } else {
+                             try {
+                                 String minStr = new String(parts.get(2), StandardCharsets.UTF_8).toLowerCase();
+                                 String maxStr = new String(parts.get(3), StandardCharsets.UTF_8).toLowerCase();
+                                 double min = minStr.equals("-inf") ? Double.NEGATIVE_INFINITY : (minStr.equals("+inf") || minStr.equals("inf") ? Double.POSITIVE_INFINITY : Double.parseDouble(minStr));
+                                 double max = maxStr.equals("-inf") ? Double.NEGATIVE_INFINITY : (maxStr.equals("+inf") || maxStr.equals("inf") ? Double.POSITIVE_INFINITY : Double.parseDouble(maxStr));
+                                 
+                                 CaradeZSet zset = (CaradeZSet) entry.value;
+                                 long count = 0;
+                                 ZNode startNode = new ZNode(min, "");
+                                 for (ZNode node : zset.sorted.tailSet(startNode)) {
+                                     if (node.score > max) break;
+                                     count++;
+                                 }
+                                 send(out, isResp, Resp.integer(count), "(integer) " + count);
+                             } catch (NumberFormatException e) {
+                                 send(out, isResp, Resp.error("ERR min or max is not a float"), "(error) ERR min or max is not a float");
+                             }
+                        }
+                    }
+                    break;
+
                 case "ZSCORE":
                     if (parts.size() < 3) send(out, isResp, Resp.error("usage: ZSCORE key member"), "(error) usage: ZSCORE key member");
                     else {
