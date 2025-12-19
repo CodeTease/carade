@@ -27,7 +27,7 @@ jobs:
 
       - name: Start Carade Server
         run: |
-          java -cp bin Carade > carade.log 2>&1 &
+          java -cp . core.Carade > carade.log 2>&1 &
           echo $! > server.pid
           
       - name: Wait for Server to be ready

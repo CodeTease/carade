@@ -39,7 +39,7 @@ javac core/*.java
 2. **Run**
 ```bash
 # Run with default config or carade.conf if present
-java -cp core Carade
+java -cp . core.Carade
 ```
 
 The server listens on port **63790** (default).
