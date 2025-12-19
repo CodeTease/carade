@@ -28,6 +28,7 @@ import java.util.concurrent.TimeoutException;
 
 public class ClientHandler implements Runnable, PubSub.Subscriber {
     private final Socket socket;
+    private String clientName = null;
     private Config.User currentUser = null; // null = not authenticated
     public boolean isSubscribed = false; // Accessible by Carade (hacky)
     private OutputStream outStream; // Keep ref for PubSub callbacks
@@ -41,6 +42,14 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
 
     public ClientHandler(Socket socket) { 
         this.socket = socket; 
+    }
+
+    public void setClientName(String name) {
+        this.clientName = name;
+    }
+
+    public String getClientName() {
+        return clientName;
     }
 
     public void markDirty() {

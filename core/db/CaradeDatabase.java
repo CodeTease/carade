@@ -14,6 +14,15 @@ public class CaradeDatabase {
     // Carade.java uses globalRWLock for some operations.
     // For now we expose store directly to ease migration, but ideally methods should be here.
 
+    private static CaradeDatabase INSTANCE;
+    
+    public static synchronized CaradeDatabase getInstance() {
+        if (INSTANCE == null) {
+            INSTANCE = new CaradeDatabase(new Config(), AofHandler.getInstance());
+        }
+        return INSTANCE;
+    }
+
     private final Config config;
     private final AofHandler aofHandler;
     private final AtomicInteger writeCounter = new AtomicInteger(0);
@@ -21,6 +30,7 @@ public class CaradeDatabase {
     public CaradeDatabase(Config config, AofHandler aofHandler) {
         this.config = config;
         this.aofHandler = aofHandler;
+        INSTANCE = this;
     }
 
     public ValueEntry get(String key) {
@@ -93,6 +103,19 @@ public class CaradeDatabase {
     
     public void clear() {
         store.clear();
+    }
+    
+    public ConcurrentHashMap<String, ValueEntry> getStorage() {
+        return store;
+    }
+
+    public boolean exists(String key) {
+        return get(key) != null;
+    }
+
+    public void cleanup() {
+         long now = System.currentTimeMillis();
+         store.values().removeIf(v -> v.isExpired(now));
     }
     
     public Set<String> keySet() {

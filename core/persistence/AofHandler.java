@@ -18,8 +18,18 @@ public class AofHandler {
     private final ConcurrentLinkedQueue<byte[]> rewriteBuffer = new ConcurrentLinkedQueue<>();
     private volatile boolean isRewriting = false;
     
-    public AofHandler(String filename) {
+    private static AofHandler INSTANCE;
+
+    public static synchronized AofHandler getInstance() {
+        if (INSTANCE == null) {
+            INSTANCE = new AofHandler("carade.aof");
+        }
+        return INSTANCE;
+    }
+
+    private AofHandler(String filename) {
         this.filename = filename;
+        INSTANCE = this; 
         try {
             this.outStream = new BufferedOutputStream(new FileOutputStream(filename, true));
         } catch (IOException e) {
@@ -33,6 +43,11 @@ public class AofHandler {
             return t;
         });
         this.flusher.scheduleAtFixedRate(this::flush, 1, 1, TimeUnit.SECONDS);
+    }
+    
+    // For testing or manual init
+    public AofHandler(File file) {
+        this(file.getAbsolutePath());
     }
 
     public synchronized void log(String cmd, Object... args) {

@@ -4,6 +4,9 @@ import java.io.*;
 import java.util.*;
 
 public class Config {
+    public static final int PORT = 63790; // Backward compat for ConfigGet
+    public static final String MAXMEMORY = "0"; // Backward compat for ConfigGet
+
     public int port = 63790;
     public String password = "teasertopsecret";
     public long maxMemory = 0; // 0 = unlimited

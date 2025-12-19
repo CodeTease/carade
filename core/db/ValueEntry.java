@@ -21,6 +21,18 @@ public class ValueEntry implements Serializable {
         return expireAt != -1 && System.currentTimeMillis() > expireAt;
     }
 
+    public boolean isExpired(long now) {
+        return expireAt != -1 && now > expireAt;
+    }
+
+    public void setExpireAt(long expireAt) {
+        this.expireAt = expireAt;
+    }
+
+    public long getExpireAt() {
+        return expireAt;
+    }
+
     public void touch() {
         this.lastAccessed = System.nanoTime();
     }

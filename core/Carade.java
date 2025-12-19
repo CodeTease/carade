@@ -144,7 +144,7 @@ public class Carade {
         }
 
         // Initialize AOF
-        aofHandler = new AofHandler(AOF_FILE);
+        aofHandler = AofHandler.getInstance();
         
         // Initialize DB
         db = new CaradeDatabase(config, aofHandler);
@@ -160,6 +160,7 @@ public class Carade {
                     cleanupExpiredKeys(); 
                     cleanupExpiredCursors();
                     saveData();
+                    System.out.println("[Janitor] Cleanup cycle completed. Database size: " + db.size());
                 } catch (InterruptedException e) { break; }
             }
         });
