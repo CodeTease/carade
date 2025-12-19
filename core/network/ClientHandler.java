@@ -89,6 +89,66 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
         send(outStream, currentIsResp, Resp.error(msg), "(error) " + msg);
     }
 
+    // Helper methods for Commands
+    public void sendInteger(long i) {
+        send(outStream, currentIsResp, Resp.integer(i), "(integer) " + i);
+    }
+    
+    public void sendNull() {
+        send(outStream, currentIsResp, Resp.bulkString((byte[])null), "(nil)");
+    }
+    
+    public void sendBulkString(String s) {
+        send(outStream, currentIsResp, Resp.bulkString(s), s == null ? "(nil)" : "\"" + s + "\"");
+    }
+    
+    public void sendArray(List<byte[]> list) {
+        if (currentIsResp) {
+            send(outStream, true, Resp.array(list), null);
+        } else {
+            StringBuilder sb = new StringBuilder();
+            if (list == null || list.isEmpty()) {
+                sb.append("(empty list or set)");
+            } else {
+                for (int i = 0; i < list.size(); i++) {
+                    sb.append(i + 1).append(") \"").append(new String(list.get(i), StandardCharsets.UTF_8)).append("\"\n");
+                }
+            }
+            send(outStream, false, null, sb.toString().trim());
+        }
+    }
+    
+    public void sendMixedArray(List<Object> list) {
+         if (currentIsResp) {
+             send(outStream, true, Resp.mixedArray(list), null);
+         } else {
+             // Basic recursive string representation for text mode
+             send(outStream, false, null, mixedArrayToString(list, 0).trim());
+         }
+    }
+    
+    private String mixedArrayToString(List<Object> list, int level) {
+        if (list == null || list.isEmpty()) return "(empty list or set)";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            Object o = list.get(i);
+            // Indentation
+            for(int j=0; j<level; j++) sb.append("  ");
+            
+            sb.append(i + 1).append(") ");
+            if (o instanceof byte[]) {
+                sb.append("\"").append(new String((byte[]) o, StandardCharsets.UTF_8)).append("\"\n");
+            } else if (o instanceof Long || o instanceof Integer) {
+                sb.append("(integer) ").append(o).append("\n");
+            } else if (o instanceof List) {
+                sb.append("\n").append(mixedArrayToString((List<Object>) o, level + 1));
+            } else {
+                sb.append(o).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
     private boolean isWriteCommand(String cmd) {
         return Arrays.asList("SET", "DEL", "LPUSH", "RPUSH", "LPOP", "RPOP", 
                              "HSET", "HDEL", "SADD", "SREM", "FLUSHALL", 

@@ -51,6 +51,27 @@ public class Resp {
             return bos.toByteArray();
         } catch (IOException e) { return null; }
     }
+
+    public static byte[] mixedArray(List<Object> list) {
+        if (list == null) return "*-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            String header = "*" + list.size() + "\r\n";
+            bos.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (Object o : list) {
+                if (o instanceof byte[]) {
+                    bos.write(bulkString((byte[]) o));
+                } else if (o instanceof Long || o instanceof Integer) {
+                    bos.write(integer(((Number) o).longValue()));
+                } else if (o instanceof List) {
+                    bos.write(mixedArray((List<Object>) o));
+                } else if (o == null) {
+                    bos.write("$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+            return bos.toByteArray();
+        } catch (IOException e) { return null; }
+    }
     
     public static byte[] array(List<byte[]> list) {
         if (list == null) return "*-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);

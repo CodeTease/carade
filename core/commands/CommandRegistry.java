@@ -5,6 +5,7 @@ import core.commands.string.SetNxCommand;
 import core.commands.generic.*;
 import core.commands.server.ConfigGetCommand;
 import core.commands.connection.*;
+import core.commands.geo.*;
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -26,6 +27,11 @@ public class CommandRegistry {
         
         // Server / Config
         register("CONFIG", new ConfigGetCommand());
+
+        // GEO
+        register("GEOADD", new GeoAddCommand());
+        register("GEODIST", new GeoDistCommand());
+        register("GEORADIUS", new GeoRadiusCommand());
         
         // Connection
         register("SELECT", new SelectCommand());
