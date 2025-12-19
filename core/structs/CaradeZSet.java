@@ -3,12 +3,43 @@ package core.structs;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.io.Serializable;
+import java.util.NavigableSet;
 
 public class CaradeZSet implements Serializable {
     private static final long serialVersionUID = 1L;
     
     public final ConcurrentHashMap<String, Double> scores = new ConcurrentHashMap<>();
     public final ConcurrentSkipListSet<ZNode> sorted = new ConcurrentSkipListSet<>();
+
+    public NavigableSet<ZNode> rangeByScore(double min, boolean minInclusive, double max, boolean maxInclusive) {
+        ZNode start = null;
+        if (min == Double.NEGATIVE_INFINITY && minInclusive) {
+            start = null;
+        } else {
+            if (minInclusive) {
+                start = new ZNode(min, "");
+            } else {
+                start = new ZNode(Math.nextUp(min), "");
+            }
+        }
+
+        ZNode end = null;
+        if (max == Double.POSITIVE_INFINITY && maxInclusive) {
+            end = null;
+        } else {
+            if (maxInclusive) {
+                if (max == Double.POSITIVE_INFINITY) end = null;
+                else end = new ZNode(Math.nextUp(max), "");
+            } else {
+                end = new ZNode(max, "");
+            }
+        }
+
+        if (start == null && end == null) return sorted;
+        if (start == null) return sorted.headSet(end);
+        if (end == null) return sorted.tailSet(start);
+        return sorted.subSet(start, end);
+    }
 
     public int add(double score, String member) {
         Double oldScore = scores.get(member);
