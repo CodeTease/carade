@@ -1,3 +1,10 @@
+package core.persistence;
+
+import core.db.ValueEntry;
+import core.db.DataType;
+import core.structs.CaradeZSet;
+import core.protocol.Resp;
+
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -65,7 +72,7 @@ public class AofHandler {
         }
     }
 
-    public void rewrite(Map<String, Carade.ValueEntry> store) {
+    public void rewrite(Map<String, ValueEntry> store) {
         isRewriting = true;
         rewriteBuffer.clear();
         
@@ -73,13 +80,13 @@ public class AofHandler {
         OutputStream tempOut = null;
         try {
             tempOut = new BufferedOutputStream(new FileOutputStream(tempFile));
-            for (Map.Entry<String, Carade.ValueEntry> entry : store.entrySet()) {
+            for (Map.Entry<String, ValueEntry> entry : store.entrySet()) {
                 String key = entry.getKey();
-                Carade.ValueEntry val = entry.getValue();
+                ValueEntry val = entry.getValue();
                 if (val.isExpired()) continue;
 
                 // Reconstruct commands based on type
-                if (val.type == Carade.DataType.STRING) {
+                if (val.type == DataType.STRING) {
                      byte[] v = (byte[]) val.value;
                      if (val.expireAt > 0) {
                          long ttl = (val.expireAt - System.currentTimeMillis()) / 1000;
@@ -88,23 +95,23 @@ public class AofHandler {
                      } else {
                          writeCommand(tempOut, "SET", key.getBytes(StandardCharsets.UTF_8), v);
                      }
-                } else if (val.type == Carade.DataType.LIST) {
+                } else if (val.type == DataType.LIST) {
                     ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) val.value;
                     for (String s : list) {
                         writeCommand(tempOut, "RPUSH", key.getBytes(StandardCharsets.UTF_8), s.getBytes(StandardCharsets.UTF_8));
                     }
-                } else if (val.type == Carade.DataType.HASH) {
+                } else if (val.type == DataType.HASH) {
                     ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) val.value;
                     for (Map.Entry<String, String> e : map.entrySet()) {
                         writeCommand(tempOut, "HSET", key.getBytes(StandardCharsets.UTF_8), e.getKey().getBytes(StandardCharsets.UTF_8), e.getValue().getBytes(StandardCharsets.UTF_8));
                     }
-                } else if (val.type == Carade.DataType.SET) {
+                } else if (val.type == DataType.SET) {
                     Set<String> set = (Set<String>) val.value;
                     for (String s : set) {
                         writeCommand(tempOut, "SADD", key.getBytes(StandardCharsets.UTF_8), s.getBytes(StandardCharsets.UTF_8));
                     }
-                } else if (val.type == Carade.DataType.ZSET) {
-                    Carade.CaradeZSet zset = (Carade.CaradeZSet) val.value;
+                } else if (val.type == DataType.ZSET) {
+                    CaradeZSet zset = (CaradeZSet) val.value;
                     for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
                          writeCommand(tempOut, "ZADD", key.getBytes(StandardCharsets.UTF_8), String.valueOf(e.getValue()).getBytes(StandardCharsets.UTF_8), e.getKey().getBytes(StandardCharsets.UTF_8));
                     }
