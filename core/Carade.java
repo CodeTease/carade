@@ -7,6 +7,8 @@ import core.commands.string.SetCommand;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.persistence.AofHandler;
+import core.persistence.rdb.RdbEncoder;
+import core.persistence.rdb.RdbParser;
 import core.structs.CaradeZSet;
 import core.structs.ZNode;
 
@@ -537,59 +539,9 @@ public class Carade {
     }
 
     private static void saveData() {
-        try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(DUMP_FILE)))) {
-            dos.writeBytes("CARD");
-            dos.writeInt(1);
-            
-            for (Map.Entry<String, ValueEntry> entry : db.entrySet()) {
-                ValueEntry v = entry.getValue();
-                if (v.isExpired()) continue;
-                
-                int typeCode = 0;
-                if (v.type == DataType.LIST) typeCode = 1;
-                else if (v.type == DataType.HASH) typeCode = 2;
-                else if (v.type == DataType.SET) typeCode = 3;
-                else if (v.type == DataType.ZSET) typeCode = 4;
-                dos.writeByte(typeCode);
-                
-                dos.writeLong(v.expireAt);
-                writeString(dos, entry.getKey());
-                
-                switch (v.type) {
-                    case STRING:
-                        byte[] b = (byte[]) v.value;
-                        dos.writeInt(b.length);
-                        dos.write(b);
-                        break;
-                    case LIST:
-                        ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
-                        dos.writeInt(list.size());
-                        for (String s : list) writeString(dos, s);
-                        break;
-                    case HASH:
-                        ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
-                        dos.writeInt(map.size());
-                        for (Map.Entry<String, String> e : map.entrySet()) {
-                            writeString(dos, e.getKey());
-                            writeString(dos, e.getValue());
-                        }
-                        break;
-                    case SET:
-                        Set<String> set = (Set<String>) v.value;
-                        dos.writeInt(set.size());
-                        for (String s : set) writeString(dos, s);
-                        break;
-                    case ZSET:
-                        CaradeZSet zset = (CaradeZSet) v.value;
-                        dos.writeInt(zset.size());
-                        for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
-                            writeString(dos, e.getKey());
-                            dos.writeDouble(e.getValue());
-                        }
-                        break;
-                }
-            }
-            System.out.println("💾 Snapshot saved.");
+        try {
+            new RdbEncoder().save(db, DUMP_FILE);
+            System.out.println("💾 Snapshot saved (RDB).");
         } catch (IOException e) {
             System.err.println("⚠️ Save failed: " + e.getMessage());
         }
@@ -612,75 +564,87 @@ public class Carade {
         File f = new File(DUMP_FILE);
         if (!f.exists()) return;
         
-        try (DataInputStream dis = new DataInputStream(new BufferedInputStream(new FileInputStream(f)))) {
-            byte[] magic = new byte[4];
-            dis.readFully(magic);
-            if (!Arrays.equals(magic, "CARD".getBytes())) {
-                throw new IOException("Invalid magic header");
+        try (InputStream is = new BufferedInputStream(new FileInputStream(f))) {
+            is.mark(5);
+            byte[] magic = new byte[5];
+            is.read(magic);
+            is.reset();
+            
+            String header = new String(magic);
+
+            if (header.equals("REDIS")) {
+                 System.out.println("📂 Detected RDB file. Loading...");
+                 new RdbParser(is).parse(db);
+                 System.out.println("📂 Loaded " + db.size() + " keys (RDB).");
+            } else if (header.startsWith("CARD")) {
+                 // Fallback to legacy CARD parser
+                 try (DataInputStream dis = new DataInputStream(is)) { // Wrap the same stream
+                     byte[] m = new byte[4];
+                     dis.readFully(m); // Eat CARD
+                     int version = dis.readInt();
+                     if (version != 1) throw new IOException("Unknown version: " + version);
+                     
+                     db.clear();
+                     while (dis.available() > 0) {
+                        try {
+                            int typeCode = dis.readByte();
+                            long expireAt = dis.readLong();
+                            String key = readString(dis);
+                            
+                            DataType type = DataType.STRING;
+                            Object value = null;
+                            
+                            if (typeCode == 0) {
+                                type = DataType.STRING;
+                                String s = readString(dis);
+                                value = s.getBytes(StandardCharsets.UTF_8);
+                            } else if (typeCode == 1) {
+                                type = DataType.LIST;
+                                int size = dis.readInt();
+                                ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
+                                for (int i=0; i<size; i++) list.add(readString(dis));
+                                value = list;
+                            } else if (typeCode == 2) {
+                                type = DataType.HASH;
+                                int size = dis.readInt();
+                                ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
+                                for (int i=0; i<size; i++) {
+                                    String k = readString(dis);
+                                    String v = readString(dis);
+                                    map.put(k, v);
+                                }
+                                value = map;
+                            } else if (typeCode == 3) {
+                                type = DataType.SET;
+                                int size = dis.readInt();
+                                Set<String> set = ConcurrentHashMap.newKeySet();
+                                for (int i=0; i<size; i++) set.add(readString(dis));
+                                value = set;
+                            } else if (typeCode == 4) {
+                                type = DataType.ZSET;
+                                int size = dis.readInt();
+                                CaradeZSet zset = new CaradeZSet();
+                                for (int i=0; i<size; i++) {
+                                    String member = readString(dis);
+                                    double score = dis.readDouble();
+                                    zset.add(score, member);
+                                }
+                                value = zset;
+                            }
+                            
+                            ValueEntry ve = new ValueEntry(value, type, -1);
+                            ve.expireAt = expireAt;
+                            if (!ve.isExpired()) db.put(key, ve);
+                        } catch (EOFException e) { break; }
+                     }
+                     System.out.println("📂 Loaded " + db.size() + " keys (Snapshot CARD).");
+                 }
+            } else {
+                 loadLegacyData(); // Object stream
             }
-            
-            int version = dis.readInt();
-            if (version != 1) throw new IOException("Unknown version: " + version);
-            
-            db.clear();
-            while (dis.available() > 0) {
-                try {
-                    int typeCode = dis.readByte();
-                    long expireAt = dis.readLong();
-                    String key = readString(dis);
-                    
-                    DataType type = DataType.STRING;
-                    Object value = null;
-                    
-                    if (typeCode == 0) {
-                        type = DataType.STRING;
-                        String s = readString(dis);
-                        value = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                    } else if (typeCode == 1) {
-                        type = DataType.LIST;
-                        int size = dis.readInt();
-                        ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
-                        for (int i=0; i<size; i++) list.add(readString(dis));
-                        value = list;
-                    } else if (typeCode == 2) {
-                        type = DataType.HASH;
-                        int size = dis.readInt();
-                        ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
-                        for (int i=0; i<size; i++) {
-                            String k = readString(dis);
-                            String v = readString(dis);
-                            map.put(k, v);
-                        }
-                        value = map;
-                    } else if (typeCode == 3) {
-                        type = DataType.SET;
-                        int size = dis.readInt();
-                        Set<String> set = ConcurrentHashMap.newKeySet();
-                        for (int i=0; i<size; i++) set.add(readString(dis));
-                        value = set;
-                    } else if (typeCode == 4) {
-                        type = DataType.ZSET;
-                        int size = dis.readInt();
-                        CaradeZSet zset = new CaradeZSet();
-                        for (int i=0; i<size; i++) {
-                            String member = readString(dis);
-                            double score = dis.readDouble();
-                            zset.add(score, member);
-                        }
-                        value = zset;
-                    }
-                    
-                    ValueEntry ve = new ValueEntry(value, type, -1);
-                    ve.expireAt = expireAt;
-                    if (!ve.isExpired()) db.put(key, ve);
-                    
-                } catch (EOFException e) { break; }
-            }
-            System.out.println("📂 Loaded " + db.size() + " keys (Snapshot).");
-            
         } catch (Exception e) {
-            System.out.println("⚠️ Snapshot load failed (" + e.getMessage() + "). Trying legacy load...");
-            loadLegacyData();
+             System.out.println("⚠️ Load failed: " + e.getMessage());
+             e.printStackTrace();
         }
     }
     
