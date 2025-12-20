@@ -297,6 +297,7 @@ public class RdbParser {
         in.readFully(ver); // Version (e.g. 0009) - we can ignore strict check for now
         
         long expireAt = -1;
+        int dbIndex = 0;
         
         while (true) {
             int type = in.read();
@@ -305,8 +306,14 @@ public class RdbParser {
             if (type == RdbConstants.RDB_OPCODE_EOF) {
                 break;
             } else if (type == RdbConstants.RDB_OPCODE_SELECTDB) {
-                loadLen(); // DB number
-                // We ignore DB number and load everything into single DB
+                dbIndex = (int) loadLen(); 
+                if (dbIndex >= CaradeDatabase.DB_COUNT) {
+                     // If file has more DBs than we support, we just wrap or clamp? 
+                     // Redis default 16. Let's clamp or ignore. 
+                     // Actually better to just use % or ensure RDB comes from compatible source.
+                     // For now, let's clamp.
+                     dbIndex = dbIndex % CaradeDatabase.DB_COUNT;
+                }
             } else if (type == RdbConstants.RDB_OPCODE_RESIZEDB) {
                 loadLen(); // db_size
                 loadLen(); // expires_size
@@ -325,7 +332,7 @@ public class RdbParser {
                 val.expireAt = expireAt;
                 
                 if (!val.isExpired()) {
-                    db.put(key, val);
+                    db.put(dbIndex, key, val);
                 }
                 
                 expireAt = -1; // Reset expire

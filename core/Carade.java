@@ -219,10 +219,23 @@ public class Carade {
     }
 
     // AOF Replay Logic
+    // Internal AOF Replay State
+    private static int replayDbIndex = 0;
+
     private static void executeInternal(List<byte[]> parts) {
         if (parts.isEmpty()) return;
         String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
         try {
+            // Check for SELECT first
+            if (cmd.equals("SELECT")) {
+                 if (parts.size() >= 2) {
+                     try {
+                         replayDbIndex = Integer.parseInt(new String(parts.get(1), StandardCharsets.UTF_8));
+                     } catch (Exception e) {}
+                 }
+                 return;
+            }
+
             switch (cmd) {
                 case "SET":
                     if (parts.size() >= 3) {
@@ -231,7 +244,7 @@ public class Carade {
                             try { ttl = Long.parseLong(new String(parts.get(4), StandardCharsets.UTF_8)); } catch (Exception e) {}
                         }
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                        db.put(key, new ValueEntry(parts.get(2), DataType.STRING, ttl));
+                        db.put(replayDbIndex, key, new ValueEntry(parts.get(2), DataType.STRING, ttl));
                     }
                     break;
                 case "SETBIT":
@@ -240,7 +253,7 @@ public class Carade {
                          try {
                              int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
                              int val = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
-                             db.store.compute(key, (k, v) -> {
+                             db.getStore(replayDbIndex).compute(key, (k, v) -> {
                                  byte[] bytes;
                                  if (v == null) bytes = new byte[0];
                                  else if (v.type == DataType.STRING) bytes = (byte[]) v.value;
@@ -267,18 +280,18 @@ public class Carade {
                     if (parts.size() >= 3) {
                          String oldKey = new String(parts.get(1), StandardCharsets.UTF_8);
                          String newKey = new String(parts.get(2), StandardCharsets.UTF_8);
-                         ValueEntry v = db.remove(oldKey);
-                         if (v != null) db.put(newKey, v);
+                         ValueEntry v = db.remove(replayDbIndex, oldKey);
+                         if (v != null) db.put(replayDbIndex, newKey, v);
                     }
                     break;
                 case "DEL":
-                    if (parts.size() >= 2) db.remove(new String(parts.get(1), StandardCharsets.UTF_8));
+                    if (parts.size() >= 2) db.remove(replayDbIndex, new String(parts.get(1), StandardCharsets.UTF_8));
                     break;
                 case "HDEL":
                     if (parts.size() >= 3) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                        db.store.computeIfPresent(key, (k, v) -> {
+                        db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.HASH) {
                                 ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
                                 map.remove(field);
@@ -292,7 +305,7 @@ public class Carade {
                     if (parts.size() >= 3) {
                          String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                         db.store.computeIfPresent(key, (k, v) -> {
+                         db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.SET) {
                                 Set<String> set = (Set<String>) v.value;
                                 set.remove(member);
@@ -306,7 +319,7 @@ public class Carade {
                     if (parts.size() >= 3) {
                          String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                         db.store.computeIfPresent(key, (k, v) -> {
+                         db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.ZSET) {
                                 CaradeZSet zset = (CaradeZSet) v.value;
                                 Double score = zset.scores.remove(member);
@@ -323,7 +336,7 @@ public class Carade {
                     if (parts.size() >= 4) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         try {
-                             db.store.compute(key, (k, v) -> {
+                             db.getStore(replayDbIndex).compute(key, (k, v) -> {
                                  CaradeZSet zset;
                                  if (v == null) {
                                      zset = new CaradeZSet();
@@ -352,7 +365,7 @@ public class Carade {
                         try {
                              double incr = Double.parseDouble(new String(parts.get(2), StandardCharsets.UTF_8));
                              String member = new String(parts.get(3), StandardCharsets.UTF_8);
-                             db.store.compute(key, (k, v) -> {
+                             db.getStore(replayDbIndex).compute(key, (k, v) -> {
                                  CaradeZSet zset;
                                  if (v == null) {
                                      zset = new CaradeZSet();
@@ -374,7 +387,7 @@ public class Carade {
                             if (i + 1 < parts.size()) {
                                 String key = new String(parts.get(i), StandardCharsets.UTF_8);
                                 byte[] val = parts.get(i+1);
-                                db.put(key, new ValueEntry(val, DataType.STRING, -1));
+                                db.put(replayDbIndex, key, new ValueEntry(val, DataType.STRING, -1));
                             }
                         }
                     }
@@ -384,7 +397,7 @@ public class Carade {
                     if (parts.size() >= 3) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         String val = new String(parts.get(2), StandardCharsets.UTF_8);
-                        db.store.compute(key, (k, v) -> {
+                        db.getStore(replayDbIndex).compute(key, (k, v) -> {
                             if (v == null) {
                                 ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
                                 list.add(val);
@@ -402,7 +415,7 @@ public class Carade {
                 case "RPOP":
                      if (parts.size() >= 2) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                        db.store.computeIfPresent(key, (k, v) -> {
+                        db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.LIST) {
                                 ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
                                 if (!list.isEmpty()) {
@@ -419,7 +432,7 @@ public class Carade {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         String val = new String(parts.get(3), StandardCharsets.UTF_8);
-                        db.store.compute(key, (k, v) -> {
+                        db.getStore(replayDbIndex).compute(key, (k, v) -> {
                             if (v == null) {
                                 ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
                                 map.put(field, val);
@@ -437,7 +450,7 @@ public class Carade {
                          String field = new String(parts.get(2), StandardCharsets.UTF_8);
                          try {
                              long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
-                             db.store.compute(key, (k, v) -> {
+                             db.getStore(replayDbIndex).compute(key, (k, v) -> {
                                 if (v == null) {
                                     ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
                                     map.put(field, String.valueOf(incr));
@@ -464,7 +477,7 @@ public class Carade {
                     if (parts.size() >= 3) {
                          String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                         db.store.compute(key, (k, v) -> {
+                         db.getStore(replayDbIndex).compute(key, (k, v) -> {
                             if (v == null) {
                                 Set<String> set = ConcurrentHashMap.newKeySet();
                                 set.add(member);
@@ -477,13 +490,16 @@ public class Carade {
                     }
                     break;
                 case "FLUSHALL":
-                    db.clear();
+                    db.clearAll();
+                    break;
+                case "FLUSHDB":
+                    db.clear(replayDbIndex);
                     break;
                 case "INCR":
                 case "DECR":
                     if (parts.size() >= 2) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                        db.store.compute(key, (k, v) -> {
+                        db.getStore(replayDbIndex).compute(key, (k, v) -> {
                             long val = 0;
                             if (v == null) {
                                 val = 0;
@@ -506,11 +522,37 @@ public class Carade {
                          String key = new String(parts.get(1), StandardCharsets.UTF_8);
                          try {
                              long seconds = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
-                             db.store.computeIfPresent(key, (k, v) -> {
+                             db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                                  v.expireAt = System.currentTimeMillis() + (seconds * 1000);
                                  return v;
                              });
                          } catch (Exception e) {}
+                    }
+                    break;
+                case "RPOPLPUSH":
+                    if (parts.size() >= 3) {
+                        String source = new String(parts.get(1), StandardCharsets.UTF_8);
+                        String dest = new String(parts.get(2), StandardCharsets.UTF_8);
+                        ValueEntry srcEntry = db.get(replayDbIndex, source);
+                        if (srcEntry != null && srcEntry.type == DataType.LIST) {
+                            ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) srcEntry.value;
+                            if (!srcList.isEmpty()) {
+                                String val = srcList.pollLast();
+                                if (srcList.isEmpty()) db.remove(replayDbIndex, source);
+                                
+                                db.getStore(replayDbIndex).compute(dest, (k, v) -> {
+                                    if (v == null) {
+                                        ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
+                                        list.addFirst(val);
+                                        return new ValueEntry(list, DataType.LIST, -1);
+                                    } else if (v.type == DataType.LIST) {
+                                        ((ConcurrentLinkedDeque<String>) v.value).addFirst(val);
+                                        return v;
+                                    }
+                                    return v;
+                                });
+                            }
+                        }
                     }
                     break;
             }
@@ -521,13 +563,19 @@ public class Carade {
     
     private static void cleanupExpiredKeys() {
         int removed = 0;
-        Iterator<Map.Entry<String, ValueEntry>> it = db.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, ValueEntry> entry = it.next();
-            if (entry.getValue().isExpired()) {
-                it.remove();
-                if (aofHandler != null) aofHandler.log("DEL", entry.getKey());
-                removed++;
+        for (int i=0; i < CaradeDatabase.DB_COUNT; i++) {
+             Iterator<Map.Entry<String, ValueEntry>> it = db.entrySet(i).iterator();
+             while (it.hasNext()) {
+                Map.Entry<String, ValueEntry> entry = it.next();
+                if (entry.getValue().isExpired()) {
+                    it.remove();
+                    if (aofHandler != null) {
+                        // TODO: Log SELECT if needed?
+                        // For now we assume AOF logic handles context or we just log DEL
+                        aofHandler.log("DEL", entry.getKey()); 
+                    }
+                    removed++;
+                }
             }
         }
         if (removed > 0) System.out.println("🧹 [GC] Vacuumed " + removed + " expired keys.");

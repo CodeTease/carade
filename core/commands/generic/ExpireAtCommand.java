@@ -19,7 +19,7 @@ public class ExpireAtCommand implements Command {
         try {
             long timestamp = Long.parseLong(new String(args.get(2), StandardCharsets.UTF_8));
             final int[] ret = {0};
-            Carade.db.getStorage().computeIfPresent(key, (k, v) -> {
+            Carade.db.getStorage(client.dbIndex).computeIfPresent(key, (k, v) -> {
                 v.setExpireAt(timestamp * 1000);
                 ret[0] = 1;
                 return v;

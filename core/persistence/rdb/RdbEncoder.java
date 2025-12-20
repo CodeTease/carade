@@ -25,74 +25,78 @@ public class RdbEncoder {
             writeString(dos, "redis-ver");
             writeString(dos, "6.0.0"); // Pretend to be Redis 6
             
-            // Select DB 0
-            dos.write(RdbConstants.RDB_OPCODE_SELECTDB);
-            writeLen(dos, 0);
-            
-            // Resize DB (optional)
-            dos.write(RdbConstants.RDB_OPCODE_RESIZEDB);
-            writeLen(dos, db.size());
-            writeLen(dos, 0); // Expires size (we don't track separately easily, so 0)
-            
-            for (Map.Entry<String, ValueEntry> entry : db.entrySet()) {
-                ValueEntry v = entry.getValue();
-                if (v.isExpired()) continue;
+            for (int i = 0; i < CaradeDatabase.DB_COUNT; i++) {
+                if (db.size(i) == 0) continue;
+
+                // Select DB
+                dos.write(RdbConstants.RDB_OPCODE_SELECTDB);
+                writeLen(dos, i);
                 
-                // Expire
-                if (v.expireAt != -1) {
-                    dos.write(RdbConstants.RDB_OPCODE_EXPIRETIMEMS);
-                    dos.writeLong(v.expireAt);
-                }
+                // Resize DB (optional)
+                dos.write(RdbConstants.RDB_OPCODE_RESIZEDB);
+                writeLen(dos, db.size(i));
+                writeLen(dos, 0); // Expires size (we don't track separately easily, so 0)
                 
-                // Type
-                int type = 0;
-                if (v.type == DataType.STRING) type = RdbConstants.RDB_TYPE_STRING;
-                else if (v.type == DataType.LIST) type = RdbConstants.RDB_TYPE_LIST;
-                else if (v.type == DataType.SET) type = RdbConstants.RDB_TYPE_SET;
-                else if (v.type == DataType.ZSET) type = RdbConstants.RDB_TYPE_ZSET; // Use 3 (string score) for better compatibility
-                else if (v.type == DataType.HASH) type = RdbConstants.RDB_TYPE_HASH;
-                
-                dos.write(type);
-                
-                // Key
-                writeString(dos, entry.getKey());
-                
-                // Value
-                if (v.type == DataType.STRING) {
-                    writeString(dos, (byte[]) v.value);
-                } else if (v.type == DataType.LIST) {
-                    ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
-                    writeLen(dos, list.size());
-                    for (String s : list) writeString(dos, s);
-                } else if (v.type == DataType.SET) {
-                    Set<String> set = (Set<String>) v.value;
-                    writeLen(dos, set.size());
-                    for (String s : set) writeString(dos, s);
-                } else if (v.type == DataType.ZSET) {
-                    CaradeZSet zset = (CaradeZSet) v.value;
-                    writeLen(dos, zset.size());
-                    for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
-                        writeString(dos, e.getKey());
-                        
-                        // Write score as string to avoid endianness issues
-                        double score = e.getValue();
-                        String sScore;
-                        if (Double.isInfinite(score)) {
-                            sScore = (score > 0) ? "+inf" : "-inf"; 
-                        } else {
-                            sScore = String.valueOf(score);
-                        }
-                        
-                        byte[] bScore = sScore.getBytes(StandardCharsets.US_ASCII);
-                        dos.write(bScore.length); // 8 bit len
-                        dos.write(bScore);
+                for (Map.Entry<String, ValueEntry> entry : db.entrySet(i)) {
+                    ValueEntry v = entry.getValue();
+                    if (v.isExpired()) continue;
+                    
+                    // Expire
+                    if (v.expireAt != -1) {
+                        dos.write(RdbConstants.RDB_OPCODE_EXPIRETIMEMS);
+                        dos.writeLong(v.expireAt);
                     }
-                } else if (v.type == DataType.HASH) {
-                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
-                    writeLen(dos, map.size());
-                    for (Map.Entry<String, String> e : map.entrySet()) {
-                        writeString(dos, e.getKey());
-                        writeString(dos, e.getValue());
+                    
+                    // Type
+                    int type = 0;
+                    if (v.type == DataType.STRING) type = RdbConstants.RDB_TYPE_STRING;
+                    else if (v.type == DataType.LIST) type = RdbConstants.RDB_TYPE_LIST;
+                    else if (v.type == DataType.SET) type = RdbConstants.RDB_TYPE_SET;
+                    else if (v.type == DataType.ZSET) type = RdbConstants.RDB_TYPE_ZSET; // Use 3 (string score) for better compatibility
+                    else if (v.type == DataType.HASH) type = RdbConstants.RDB_TYPE_HASH;
+                    
+                    dos.write(type);
+                    
+                    // Key
+                    writeString(dos, entry.getKey());
+                    
+                    // Value
+                    if (v.type == DataType.STRING) {
+                        writeString(dos, (byte[]) v.value);
+                    } else if (v.type == DataType.LIST) {
+                        ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                        writeLen(dos, list.size());
+                        for (String s : list) writeString(dos, s);
+                    } else if (v.type == DataType.SET) {
+                        Set<String> set = (Set<String>) v.value;
+                        writeLen(dos, set.size());
+                        for (String s : set) writeString(dos, s);
+                    } else if (v.type == DataType.ZSET) {
+                        CaradeZSet zset = (CaradeZSet) v.value;
+                        writeLen(dos, zset.size());
+                        for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
+                            writeString(dos, e.getKey());
+                            
+                            // Write score as string to avoid endianness issues
+                            double score = e.getValue();
+                            String sScore;
+                            if (Double.isInfinite(score)) {
+                                sScore = (score > 0) ? "+inf" : "-inf"; 
+                            } else {
+                                sScore = String.valueOf(score);
+                            }
+                            
+                            byte[] bScore = sScore.getBytes(StandardCharsets.US_ASCII);
+                            dos.write(bScore.length); // 8 bit len
+                            dos.write(bScore);
+                        }
+                    } else if (v.type == DataType.HASH) {
+                        ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                        writeLen(dos, map.size());
+                        for (Map.Entry<String, String> e : map.entrySet()) {
+                            writeString(dos, e.getKey());
+                            writeString(dos, e.getValue());
+                        }
                     }
                 }
             }

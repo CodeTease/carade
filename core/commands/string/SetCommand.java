@@ -42,16 +42,16 @@ public class SetCommand implements Command {
             }
         }
         
-        if (nx && Carade.db.exists(key)) {
+        if (nx && Carade.db.exists(client.dbIndex, key)) {
             client.sendResponse(Resp.bulkString((byte[])null), "(nil)");
             return;
         }
-        if (xx && !Carade.db.exists(key)) {
+        if (xx && !Carade.db.exists(client.dbIndex, key)) {
             client.sendResponse(Resp.bulkString((byte[])null), "(nil)");
             return;
         }
 
-        Carade.db.put(key, new ValueEntry(val, DataType.STRING, ttl != -1 ? ttl : -1));
+        Carade.db.put(client.dbIndex, key, new ValueEntry(val, DataType.STRING, ttl != -1 ? ttl : -1));
         Carade.notifyWatchers(key);
         
         // AOF Logging

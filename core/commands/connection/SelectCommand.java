@@ -16,7 +16,9 @@ public class SelectCommand implements Command {
         
         try {
             int index = Integer.parseInt(new String(args.get(1), StandardCharsets.UTF_8));
-            if (index == 0) {
+            if (index >= 0 && index < core.db.CaradeDatabase.DB_COUNT) {
+                client.dbIndex = index;
+                core.Carade.aofHandler.log("SELECT", String.valueOf(index));
                 client.sendResponse(Resp.simpleString("OK"), "OK");
             } else {
                 client.sendError("ERR DB index is out of range");

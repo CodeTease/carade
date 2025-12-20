@@ -30,6 +30,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
     private final Socket socket;
     private String clientName = null;
     private Config.User currentUser = null; // null = not authenticated
+    public int dbIndex = 0; // Current DB index
     public boolean isSubscribed = false; // Accessible by Carade (hacky)
     private OutputStream outStream; // Keep ref for PubSub callbacks
     private boolean currentIsResp = false; // Track protocol mode for async callbacks
@@ -392,9 +393,9 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
          if (cursor.equals("0")) {
              // New iterator
              if (cmd.equals("SCAN")) {
-                 it = Carade.db.store.keySet().iterator();
+                 it = Carade.db.keySet(dbIndex).iterator();
              } else {
-                 ValueEntry entry = Carade.db.get(key);
+                 ValueEntry entry = Carade.db.get(dbIndex, key);
                  if (entry == null) {
                      send(out, isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
                      return;
@@ -535,7 +536,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: EXISTS key"), "(error) usage: EXISTS key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) {
                          send(out, isResp, Resp.integer(0), "(integer) 0");
                     } else {
@@ -548,7 +549,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: TYPE key"), "(error) usage: TYPE key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) {
                          send(out, isResp, Resp.simpleString("none"), "none");
                     } else {
@@ -563,11 +564,11 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String oldKey = new String(parts.get(1), StandardCharsets.UTF_8);
                     String newKey = new String(parts.get(2), StandardCharsets.UTF_8);
                     
-                    ValueEntry val = Carade.db.remove(oldKey);
+                    ValueEntry val = Carade.db.remove(dbIndex, oldKey);
                     if (val == null) {
                         send(out, isResp, Resp.error("ERR no such key"), "(error) ERR no such key");
                     } else {
-                        Carade.db.put(newKey, val);
+                        Carade.db.put(dbIndex, newKey, val);
                         Carade.notifyWatchers(oldKey);
                         Carade.notifyWatchers(newKey);
                         Carade.aofHandler.log("RENAME", oldKey, newKey);
@@ -590,7 +591,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         } else if (offset < 0) {
                             send(out, isResp, Resp.error("ERR bit offset is not an integer or out of range"), "(error) ERR bit offset is not an integer or out of range");
                         } else {
-                            Carade.db.store.compute(key, (k, v) -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                                 byte[] bytes;
                                 if (v == null) bytes = new byte[0];
                                 else if (v.type != DataType.STRING) throw new RuntimeException("WRONGTYPE");
@@ -640,7 +641,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     try {
                         int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
-                        ValueEntry entry = Carade.db.get(key);
+                        ValueEntry entry = Carade.db.get(dbIndex, key);
                         if (entry == null) {
                             send(out, isResp, Resp.integer(0), "(integer) 0");
                         } else if (entry.type != DataType.STRING) {
@@ -670,7 +671,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     for (int i = 1; i < parts.size(); i += 2) {
                         String key = new String(parts.get(i), StandardCharsets.UTF_8);
                         byte[] val = parts.get(i + 1);
-                        Carade.db.put(key, new ValueEntry(val, DataType.STRING, -1));
+                        Carade.db.put(dbIndex, key, new ValueEntry(val, DataType.STRING, -1));
                         Carade.notifyWatchers(key);
                     }
                     if (Carade.aofHandler != null) {
@@ -689,7 +690,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: GET key"), "(error) usage: GET key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                     else { 
                         if (entry.type != DataType.STRING && entry.type != null) {
@@ -710,7 +711,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         List<byte[]> results = new ArrayList<>();
                         for (int i = 1; i < parts.size(); i++) {
                             String key = new String(parts.get(i), StandardCharsets.UTF_8);
-                            ValueEntry entry = Carade.db.get(key);
+                            ValueEntry entry = Carade.db.get(dbIndex, key);
                             if (entry == null || entry.type != DataType.STRING) {
                                 results.add(null);
                             } else {
@@ -722,7 +723,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         List<String> results = new ArrayList<>();
                         for (int i = 1; i < parts.size(); i++) {
                             String key = new String(parts.get(i), StandardCharsets.UTF_8);
-                            ValueEntry entry = Carade.db.get(key);
+                            ValueEntry entry = Carade.db.get(dbIndex, key);
                             if (entry == null || entry.type != DataType.STRING) {
                                 results.add(null);
                             } else {
@@ -743,13 +744,13 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: TTL key"), "(error) usage: TTL key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) send(out, isResp, Resp.integer(-2), "(integer) -2");
                     else if (entry.expireAt == -1) send(out, isResp, Resp.integer(-1), "(integer) -1");
                     else {
                         long ttl = (entry.expireAt - System.currentTimeMillis()) / 1000;
                         if (ttl < 0) {
-                            Carade.db.remove(key);
+                            Carade.db.remove(dbIndex, key);
                             send(out, isResp, Resp.integer(-2), "(integer) -2");
                         } else {
                             send(out, isResp, Resp.integer(ttl), "(integer) " + ttl);
@@ -765,7 +766,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     try {
                         long seconds = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
                         final int[] ret = {0};
-                        Carade.db.store.computeIfPresent(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
                             v.expireAt = System.currentTimeMillis() + (seconds * 1000);
                             ret[0] = 1;
                             return v;
@@ -785,14 +786,14 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     List<byte[]> keys = new ArrayList<>();
                     List<String> keyStrings = new ArrayList<>();
                     if (pattern.equals("*")) {
-                        for(String k : Carade.db.keySet()) {
+                        for(String k : Carade.db.keySet(dbIndex)) {
                             keys.add(k.getBytes(StandardCharsets.UTF_8));
                             keyStrings.add(k);
                         }
                     } else {
                         String regex = pattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
                         java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex);
-                        for (String k : Carade.db.keySet()) {
+                        for (String k : Carade.db.keySet(dbIndex)) {
                             if (p.matcher(k).matches()) {
                                 keys.add(k.getBytes(StandardCharsets.UTF_8));
                                 keyStrings.add(k);
@@ -816,7 +817,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     final long[] ret = {0};
                     try {
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             long val = 0;
                             if (v == null) {
                                 val = 0;
@@ -858,7 +859,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     Carade.performEvictionIfNeeded();
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     try {
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             ConcurrentLinkedDeque<String> list;
                             if (v == null) {
                                 list = new ConcurrentLinkedDeque<>();
@@ -886,7 +887,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         Carade.aofHandler.log(cmd, args);
                         
                         Carade.checkBlockers(key); // Notify waiters
-                        ValueEntry v = Carade.db.get(key);
+                        ValueEntry v = Carade.db.get(dbIndex, key);
                         int size = (v != null && v.value instanceof Deque) ? ((Deque)v.value).size() : 0;
                         send(out, isResp, Resp.integer(size), "(integer) " + size);
                     } catch (RuntimeException e) {
@@ -906,14 +907,14 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         
                         boolean served = false;
                         for (String k : keys) {
-                            ValueEntry entry = Carade.db.get(k);
+                            ValueEntry entry = Carade.db.get(dbIndex, k);
                             if (entry != null && entry.type == DataType.LIST) {
                                 ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
                                 if (!list.isEmpty()) {
                                     String val = cmd.equals("BLPOP") ? list.pollFirst() : list.pollLast();
                                     if (val != null) {
                                         Carade.aofHandler.log(cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
-                                        if (list.isEmpty()) Carade.db.remove(k);
+                                        if (list.isEmpty()) Carade.db.remove(dbIndex, k);
                                         Carade.notifyWatchers(k);
                                         List<byte[]> resp = new ArrayList<>();
                                         resp.add(k.getBytes(StandardCharsets.UTF_8));
@@ -959,7 +960,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                     else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                     else {
@@ -969,7 +970,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                             String val = cmd.equals("LPOP") ? list.pollFirst() : list.pollLast(); 
                             if (val != null) {
                                 Carade.aofHandler.log(cmd, key);
-                                if (list.isEmpty()) Carade.db.remove(key); // Remove empty list
+                                if (list.isEmpty()) Carade.db.remove(dbIndex, key); // Remove empty list
                                 Carade.notifyWatchers(key);
                                 send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
                             } else {
@@ -979,12 +980,113 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     }
                 }
                 break;
-                
+            
+            case "RPOPLPUSH":
+                if (parts.size() < 3) send(out, isResp, Resp.error("usage: RPOPLPUSH source destination"), "(error) usage: RPOPLPUSH source destination");
+                else {
+                    String source = new String(parts.get(1), StandardCharsets.UTF_8);
+                    String destination = new String(parts.get(2), StandardCharsets.UTF_8);
+                    
+                    Carade.globalRWLock.writeLock().lock();
+                    try {
+                        ValueEntry entry = Carade.db.get(dbIndex, source);
+                        if (entry == null || entry.type != DataType.LIST) {
+                             if (entry != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                             else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
+                        } else {
+                            ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) entry.value;
+                            String val = srcList.pollLast();
+                            if (val == null) {
+                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
+                            } else {
+                                if (srcList.isEmpty()) Carade.db.remove(dbIndex, source);
+                                Carade.notifyWatchers(source);
+                                
+                                Carade.db.getStore(dbIndex).compute(destination, (k, v) -> {
+                                    if (v == null) {
+                                        ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
+                                        list.addFirst(val);
+                                        return new ValueEntry(list, DataType.LIST, -1);
+                                    } else if (v.type == DataType.LIST) {
+                                        ((ConcurrentLinkedDeque<String>) v.value).addFirst(val);
+                                        return v;
+                                    }
+                                    throw new RuntimeException("WRONGTYPE");
+                                });
+                                
+                                Carade.notifyWatchers(destination);
+                                Carade.aofHandler.log("RPOPLPUSH", source, destination);
+                                send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        if (e.getMessage().equals("WRONGTYPE")) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                        else throw e;
+                    } finally {
+                        Carade.globalRWLock.writeLock().unlock();
+                    }
+                }
+                break;
+
+            case "LTRIM":
+                if (parts.size() < 4) send(out, isResp, Resp.error("usage: LTRIM key start stop"), "(error) usage: LTRIM key start stop");
+                else {
+                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                     ValueEntry entry = Carade.db.get(dbIndex, key);
+                     if (entry == null) {
+                         send(out, isResp, Resp.simpleString("OK"), "OK");
+                     } else if (entry.type != DataType.LIST) {
+                         send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                     } else {
+                         try {
+                             int start = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                             int stop = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
+                             ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
+                             int size = list.size();
+                             
+                             if (start < 0) start += size;
+                             if (stop < 0) stop += size;
+                             if (start < 0) start = 0;
+                             
+                             // Redis LTRIM behavior:
+                             // trim so that it contains elements from start to stop inclusive
+                             
+                             if (start > stop || start >= size) {
+                                 // Empty the list
+                                 list.clear();
+                                 Carade.db.remove(dbIndex, key);
+                             } else {
+                                 if (stop >= size) stop = size - 1;
+                                 
+                                 // Remove from head
+                                 for (int i = 0; i < start; i++) list.pollFirst();
+                                 
+                                 // Remove from tail
+                                 // Current size is (original_size - start)
+                                 // We want to keep (stop - start + 1) elements
+                                 int currentSize = list.size();
+                                 int keep = stop - start + 1;
+                                 int removeTail = currentSize - keep;
+                                 
+                                 for (int i = 0; i < removeTail; i++) list.pollLast();
+                             }
+                             
+                             Carade.notifyWatchers(key);
+                             Carade.aofHandler.log("LTRIM", key, String.valueOf(start), String.valueOf(stop));
+                             
+                             send(out, isResp, Resp.simpleString("OK"), "OK");
+                         } catch (NumberFormatException e) {
+                             send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
+                         }
+                     }
+                }
+                break;
+
             case "LRANGE":
                 if (parts.size() < 4) send(out, isResp, Resp.error("usage: LRANGE key start stop"), "(error) usage: LRANGE key start stop");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                     else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                     else {
@@ -1030,7 +1132,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     final int[] ret = {0}; // Number of fields added
                     try {
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             ConcurrentHashMap<String, String> map;
                             if (v == null) {
                                 map = new ConcurrentHashMap<>();
@@ -1068,7 +1170,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                     else {
                         ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.value;
@@ -1082,7 +1184,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: HGETALL key"), "(error) usage: HGETALL key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                     else {
                         ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.value;
@@ -1112,7 +1214,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String field = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
-                    Carade.db.store.computeIfPresent(key, (k, v) -> {
+                    Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
                         if (v.type == DataType.HASH) {
                             ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
                             if (map.remove(field) != null) ret[0] = 1;
@@ -1137,7 +1239,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     final long[] ret = {0};
                     try {
                         long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             if (v == null) {
                                 ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
                                 map.put(field, String.valueOf(incr));
@@ -1183,7 +1285,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
                     try {
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             if (v == null) {
                                 Set<String> set = ConcurrentHashMap.newKeySet();
                                 set.add(member);
@@ -1212,7 +1314,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: SMEMBERS key"), "(error) usage: SMEMBERS key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                     else {
                         Set<String> set = (Set<String>) entry.value;
@@ -1238,7 +1340,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
-                    Carade.db.store.computeIfPresent(key, (k, v) -> {
+                    Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
                         if (v.type == DataType.SET) {
                             Set<String> set = (Set<String>) v.value;
                             if (set.remove(member)) ret[0] = 1;
@@ -1259,7 +1361,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
                     else {
                         Set<String> set = (Set<String>) entry.value;
@@ -1272,7 +1374,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: SCARD key"), "(error) usage: SCARD key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
                     else {
                         Set<String> set = (Set<String>) entry.value;
@@ -1285,13 +1387,13 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: SINTER key [key ...]"), "(error) usage: SINTER key [key ...]");
                 else {
                     String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(firstKey);
+                    ValueEntry entry = Carade.db.get(dbIndex, firstKey);
                     if (entry == null || entry.type != DataType.SET) {
                          send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
                     } else {
                          Set<String> result = new HashSet<>((Set<String>) entry.value);
                          for (int i = 2; i < parts.size(); i++) {
-                             ValueEntry e = Carade.db.get(new String(parts.get(i), StandardCharsets.UTF_8));
+                             ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
                              if (e == null || e.type != DataType.SET) {
                                  result.clear();
                                  break;
@@ -1319,7 +1421,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 else {
                      Set<String> result = new HashSet<>();
                      for (int i = 1; i < parts.size(); i++) {
-                         ValueEntry e = Carade.db.get(new String(parts.get(i), StandardCharsets.UTF_8));
+                         ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
                          if (e != null && e.type == DataType.SET) {
                              result.addAll((Set<String>) e.value);
                          }
@@ -1342,14 +1444,14 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: SDIFF key [key ...]"), "(error) usage: SDIFF key [key ...]");
                 else {
                     String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(firstKey);
+                    ValueEntry entry = Carade.db.get(dbIndex, firstKey);
                     Set<String> result = new HashSet<>();
                     if (entry != null && entry.type == DataType.SET) {
                         result.addAll((Set<String>) entry.value);
                     }
                     
                     for (int i = 2; i < parts.size(); i++) {
-                         ValueEntry e = Carade.db.get(new String(parts.get(i), StandardCharsets.UTF_8));
+                         ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
                          if (e != null && e.type == DataType.SET) {
                              result.removeAll((Set<String>) e.value);
                          }
@@ -1373,7 +1475,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: DEL key"), "(error) usage: DEL key");
                 else { 
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry prev = Carade.db.remove(key);
+                    ValueEntry prev = Carade.db.remove(dbIndex, key);
                     if (prev != null) {
                         Carade.notifyWatchers(key);
                         Carade.aofHandler.log("DEL", key);
@@ -1391,7 +1493,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         final int[] addedCount = {0};
                         try {
-                            Carade.db.store.compute(key, (k, v) -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                                 CaradeZSet zset;
                                 if (v == null) {
                                     zset = new CaradeZSet();
@@ -1434,7 +1536,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     boolean withScores = parts.size() > 4 && new String(parts.get(parts.size()-1), StandardCharsets.UTF_8).equalsIgnoreCase("WITHSCORES");
                     
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                         if (entry != null && entry.type != DataType.ZSET) {
                             send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
@@ -1495,7 +1597,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     boolean withScores = parts.size() > 4 && new String(parts.get(parts.size()-1), StandardCharsets.UTF_8).equalsIgnoreCase("WITHSCORES");
                     
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                          if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                          else send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
@@ -1551,7 +1653,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                             if (entry != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                             else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
@@ -1579,7 +1681,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                      String key = new String(parts.get(1), StandardCharsets.UTF_8);
                      String member = new String(parts.get(2), StandardCharsets.UTF_8);
                      final int[] ret = {0};
-                     Carade.db.store.computeIfPresent(key, (k, v) -> {
+                     Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
                          if (v.type == DataType.ZSET) {
                              CaradeZSet zset = (CaradeZSet) v.value;
                              Double score = zset.scores.remove(member);
@@ -1608,7 +1710,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     final double[] ret = {0.0};
                     try {
                         double incr = Double.parseDouble(new String(parts.get(2), StandardCharsets.UTF_8));
-                        Carade.db.store.compute(key, (k, v) -> {
+                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
                             CaradeZSet zset;
                             if (v == null) {
                                 zset = new CaradeZSet();
@@ -1643,7 +1745,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: ZCARD key"), "(error) usage: ZCARD key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                         if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                         else send(out, isResp, Resp.integer(0), "(integer) 0");
@@ -1658,7 +1760,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZCOUNT key min max"), "(error) usage: ZCOUNT key min max");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                          if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                          else send(out, isResp, Resp.integer(0), "(integer) 0");
@@ -1689,7 +1791,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                      if (entry == null || entry.type != DataType.ZSET) {
                          if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                          else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
@@ -1712,7 +1814,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     send(out, isResp, Resp.error("usage: " + cmd + " key min max [WITHSCORES] [LIMIT offset count]"), "(error) usage");
                 } else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(key);
+                    ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
                         if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                         else send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
@@ -1915,25 +2017,28 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (isResp) send(out, true, Resp.bulkString(info.toString().getBytes(StandardCharsets.UTF_8)), null);
                 else send(out, false, null, info.toString());
                 break;
-            case "DBSIZE": send(out, isResp, Resp.integer(Carade.db.size()), "(integer) " + Carade.db.size()); break;
+            case "DBSIZE": send(out, isResp, Resp.integer(Carade.db.size(dbIndex)), "(integer) " + Carade.db.size(dbIndex)); break;
             case "FLUSHALL": 
                 // Notify all watchers as all keys are gone
-                // We can't iterate all keys easily if map is huge, but we can iterate watchers map
-                // Or since store.clear() happens, we can just clear watchers map too?
-                // Actually, if we clear watchers map, we lose the clients references.
-                // We should iterate watchers and notify all of them.
                 for (String k : Carade.watchers.keySet()) {
                     Carade.notifyWatchers(k);
                 }
-                Carade.db.clear(); 
+                Carade.db.clearAll(); 
                 Carade.aofHandler.log("FLUSHALL");
+                send(out, isResp, Resp.simpleString("OK"), "OK"); 
+                break;
+            case "FLUSHDB": 
+                // Notify watchers for this DB keys? Hard to track which key is in which DB from watchers map alone
+                // But for now, just clear
+                Carade.db.clear(dbIndex); 
+                Carade.aofHandler.log("FLUSHDB");
                 send(out, isResp, Resp.simpleString("OK"), "OK"); 
                 break;
             case "BGREWRITEAOF":
                 // Execute in background
                 CompletableFuture.runAsync(() -> {
                     System.out.println("🔄 Starting Background AOF Rewrite...");
-                    Carade.aofHandler.rewrite(Carade.db.store);
+                    Carade.aofHandler.rewrite(Carade.db);
                 });
                 send(out, isResp, Resp.simpleString("Background append only file rewriting started"), "Background append only file rewriting started");
                 break;

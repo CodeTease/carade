@@ -20,13 +20,13 @@ public class SetNxCommand implements Command {
         String key = new String(args.get(1), StandardCharsets.UTF_8);
         byte[] val = args.get(2);
 
-        if (Carade.db.exists(key)) {
+        if (Carade.db.exists(client.dbIndex, key)) {
             client.sendResponse(Resp.integer(0), "(integer) 0");
             return;
         }
 
         Carade.performEvictionIfNeeded();
-        Carade.db.put(key, new ValueEntry(val, DataType.STRING, -1));
+        Carade.db.put(client.dbIndex, key, new ValueEntry(val, DataType.STRING, -1));
         Carade.notifyWatchers(key);
         Carade.aofHandler.log("SETNX", key, val);
         

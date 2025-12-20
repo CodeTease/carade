@@ -17,7 +17,7 @@ public class PttlCommand implements Command {
         }
 
         String key = new String(args.get(1), StandardCharsets.UTF_8);
-        ValueEntry entry = Carade.db.get(key);
+        ValueEntry entry = Carade.db.get(client.dbIndex, key);
         
         if (entry == null) {
             client.sendResponse(Resp.integer(-2), "(integer) -2");
@@ -26,7 +26,7 @@ public class PttlCommand implements Command {
         } else {
             long ttl = entry.getExpireAt() - System.currentTimeMillis();
             if (ttl < 0) {
-                Carade.db.remove(key);
+                Carade.db.remove(client.dbIndex, key);
                 client.sendResponse(Resp.integer(-2), "(integer) -2");
             } else {
                 client.sendResponse(Resp.integer(ttl), "(integer) " + ttl);

@@ -16,7 +16,7 @@ public class PersistCommand implements Command {
             return;
         }
         String key = new String(args.get(1), StandardCharsets.UTF_8);
-        ValueEntry entry = Carade.db.get(key);
+        ValueEntry entry = Carade.db.get(client.dbIndex, key);
         if (entry == null) {
             client.sendResponse(Resp.integer(0), "(integer) 0");
         } else if (entry.getExpireAt() == -1) {
