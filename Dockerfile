@@ -22,4 +22,4 @@ VOLUME /data
 
 # Run from /data so that carade.dump/aof/conf are stored/read from the volume
 # Classpath points to the code directory
-CMD ["java", "-cp", "/app/core", "Carade"]
+CMD ["java", "-cp", "/app", "core.Carade"]
