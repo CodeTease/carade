@@ -7,6 +7,7 @@ import core.commands.server.ConfigGetCommand;
 import core.commands.connection.*;
 import core.commands.geo.*;
 import core.commands.replication.*;
+import core.commands.hash.HmgetCommand;
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -18,6 +19,7 @@ public class CommandRegistry {
     static {
         register("SET", new SetCommand());
         register("SETNX", new SetNxCommand());
+        register("HMGET", new HmgetCommand());
         
         // Time / Generic
         register("PEXPIRE", new PexpireCommand());

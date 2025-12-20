@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Project: Carade
- * Version: 0.1.0 (The "Gossip" Universe Edition)
+ * Version: 0.2.0 (The "Gossip" Universe Edition)
  * Status: Alpha / Dev / Chaos / Forever
  * Author: CodeTease Team
  * "We don't bump versions, we bump features."
@@ -38,6 +38,8 @@ public class Carade {
     // --- METRICS ---
     public static final AtomicLong totalCommands = new AtomicLong(0);
     public static final AtomicInteger activeConnections = new AtomicInteger(0);
+    public static final AtomicLong keyspaceHits = new AtomicLong(0);
+    public static final AtomicLong keyspaceMisses = new AtomicLong(0);
 
     // --- STORAGE ENGINE ---
     public static CaradeDatabase db;
@@ -126,13 +128,12 @@ public class Carade {
                 "/ /___/ /_/ / /  / /_/ / /_/ /  __/\n" +
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
-                " :: Carade ::       (v0.1.0-alpha) \n" +
-                " :: Engine ::       Java Virtual Threads 🚀\n" +
-                " :: Feature ::      Pub/Sub Enabled 📡\n");
+                " :: Carade ::       (v0.2.0) \n" +
+                " :: Engine ::       Java \n");
     }
 
     public static void main(String[] args) {
-        System.out.println("\n--- CARADE v0.1.0 (The 'Gossip' Universe) ---\n");
+        System.out.println("\n--- CARADE v0.2.0 (The 'Gossip' Universe) ---\n");
         
         // Register Commands
         CommandRegistry.register("SET", new SetCommand());

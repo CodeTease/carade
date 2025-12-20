@@ -2110,7 +2110,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
             case "INFO":
                 StringBuilder info = new StringBuilder();
                 info.append("# Server\n");
-                info.append("carade_version:0.1.0\n");
+                info.append("carade_version:0.2.0\n");
                 info.append("tcp_port:").append(Carade.config.port).append("\n");
                 info.append("uptime_in_seconds:").append(ManagementFactory.getRuntimeMXBean().getUptime() / 1000).append("\n");
                 info.append("\n# Clients\n");
@@ -2120,8 +2120,8 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 info.append("maxmemory:").append(Carade.config.maxMemory).append("\n");
                 info.append("\n# Stats\n");
                 info.append("total_commands_processed:").append(Carade.totalCommands.get()).append("\n");
-                info.append("keyspace_hits:0\n"); // Todo
-                info.append("keyspace_misses:0\n"); // Todo
+                info.append("keyspace_hits:").append(Carade.keyspaceHits.get()).append("\n");
+                info.append("keyspace_misses:").append(Carade.keyspaceMisses.get()).append("\n");
                 info.append("\n# Persistence\n");
                 info.append("aof_enabled:1\n");
                 

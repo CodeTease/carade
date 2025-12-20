@@ -44,7 +44,7 @@ public class Resp {
         if (b == null) return "$-1\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         try {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            String header = "$" + b.length + "\r\n";
+            String header = "$" + (b != null ? b.length : 0) + "\r\n";
             bos.write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             bos.write(b);
             bos.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));

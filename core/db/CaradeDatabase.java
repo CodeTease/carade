@@ -51,9 +51,13 @@ public class CaradeDatabase {
             if (v.isExpired()) {
                 remove(dbIndex, key); 
                 notify(dbIndex, key, "expired");
+                Carade.keyspaceMisses.incrementAndGet();
                 return null;
             }
             v.touch();
+            Carade.keyspaceHits.incrementAndGet();
+        } else {
+            Carade.keyspaceMisses.incrementAndGet();
         }
         return v;
     }
