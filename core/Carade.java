@@ -6,7 +6,7 @@ import core.commands.CommandRegistry;
 import core.commands.string.SetCommand;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
-import core.persistence.AofHandler;
+import core.persistence.CommandLogger;
 import core.persistence.rdb.RdbEncoder;
 import core.persistence.rdb.RdbParser;
 import core.structs.CaradeZSet;
@@ -42,7 +42,7 @@ public class Carade {
     // --- STORAGE ENGINE ---
     public static CaradeDatabase db;
     public static final ReentrantReadWriteLock globalRWLock = new ReentrantReadWriteLock();
-    public static AofHandler aofHandler;
+    public static CommandLogger aofHandler;
     
     // --- SCAN ENGINE ---
     public static class ScanCursor {
@@ -146,7 +146,7 @@ public class Carade {
         }
 
         // Initialize AOF
-        aofHandler = AofHandler.getInstance();
+        aofHandler = CommandLogger.getInstance();
         
         // Initialize DB
         db = new CaradeDatabase(config, aofHandler);

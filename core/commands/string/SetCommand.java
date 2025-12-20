@@ -6,7 +6,10 @@ import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.protocol.Resp;
+import core.server.WriteSequencer;
+
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 public class SetCommand implements Command {
@@ -18,7 +21,7 @@ public class SetCommand implements Command {
         }
 
         Carade.performEvictionIfNeeded();
-        long ttl = -1;
+        long ttlVal = -1;
         boolean nx = false;
         boolean xx = false;
         
@@ -30,7 +33,7 @@ public class SetCommand implements Command {
             String arg = new String(args.get(i), StandardCharsets.UTF_8).toUpperCase();
             if (arg.equals("EX") && i + 1 < args.size()) {
                  try { 
-                    ttl = Long.parseLong(new String(args.get(++i), StandardCharsets.UTF_8)) * 1000 + System.currentTimeMillis(); 
+                    ttlVal = Long.parseLong(new String(args.get(++i), StandardCharsets.UTF_8)) * 1000 + System.currentTimeMillis(); 
                 } catch (Exception e) {
                     client.sendError("ERR value is not an integer or out of range");
                     return;
@@ -42,6 +45,8 @@ public class SetCommand implements Command {
             }
         }
         
+        final long finalTtl = ttlVal;
+
         if (nx && Carade.db.exists(client.dbIndex, key)) {
             client.sendResponse(Resp.bulkString((byte[])null), "(nil)");
             return;
@@ -51,17 +56,23 @@ public class SetCommand implements Command {
             return;
         }
 
-        Carade.db.put(client.dbIndex, key, new ValueEntry(val, DataType.STRING, ttl != -1 ? ttl : -1));
-        Carade.notifyWatchers(key);
-        
-        // AOF Logging
-        if (ttl != -1) {
-            long seconds = (ttl - System.currentTimeMillis()) / 1000;
-            if (seconds < 0) seconds = 1; // Minimum 1s if just set
-            Carade.aofHandler.log("SET", key, val, "EX", String.valueOf(seconds));
-        } else {
-            Carade.aofHandler.log("SET", key, val);
+        // Construct AOF args for correct logging
+        List<byte[]> aofArgs = new ArrayList<>();
+        aofArgs.add("SET".getBytes(StandardCharsets.UTF_8));
+        aofArgs.add(key.getBytes(StandardCharsets.UTF_8));
+        aofArgs.add(val);
+        if (finalTtl != -1) {
+            long seconds = (finalTtl - System.currentTimeMillis()) / 1000;
+            if (seconds < 0) seconds = 1;
+            aofArgs.add("EX".getBytes(StandardCharsets.UTF_8));
+            aofArgs.add(String.valueOf(seconds).getBytes(StandardCharsets.UTF_8));
         }
+        byte[] cmdBytes = Resp.array(aofArgs);
+
+        WriteSequencer.getInstance().executeWrite(() -> {
+            Carade.db.put(client.dbIndex, key, new ValueEntry(val, DataType.STRING, finalTtl != -1 ? finalTtl : -1));
+            Carade.notifyWatchers(key);
+        }, cmdBytes);
         
         client.sendResponse(Resp.simpleString("OK"), "OK");
     }

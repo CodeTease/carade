@@ -1,7 +1,7 @@
 package core.db;
 
 import core.Config;
-import core.persistence.AofHandler;
+import core.persistence.CommandLogger;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,17 +20,17 @@ public class CaradeDatabase {
     
     public static synchronized CaradeDatabase getInstance() {
         if (INSTANCE == null) {
-            INSTANCE = new CaradeDatabase(new Config(), AofHandler.getInstance());
+            INSTANCE = new CaradeDatabase(new Config(), CommandLogger.getInstance());
         }
         return INSTANCE;
     }
 
     private final Config config;
-    private final AofHandler aofHandler;
+    private final CommandLogger aofHandler;
     private final AtomicInteger writeCounter = new AtomicInteger(0);
 
     @SuppressWarnings("unchecked")
-    public CaradeDatabase(Config config, AofHandler aofHandler) {
+    public CaradeDatabase(Config config, CommandLogger aofHandler) {
         this.config = config;
         this.aofHandler = aofHandler;
         this.databases = new ConcurrentHashMap[DB_COUNT];

@@ -8,6 +8,7 @@ import core.commands.CommandRegistry;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.protocol.Resp;
+import core.server.WriteSequencer;
 import core.structs.CaradeZSet;
 import core.structs.ZNode;
 
@@ -127,6 +128,30 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
              send(outStream, false, null, mixedArrayToString(list, 0).trim());
          }
     }
+
+    /**
+     * Executes a write operation through the Global Sequencer.
+     * @param dbOp The operation to update the database.
+     * @param cmdName The command name (for logging reconstruction).
+     * @param args The command arguments (for logging reconstruction).
+     */
+    public void executeWrite(Runnable dbOp, String cmdName, Object... args) {
+        // Reconstruct the raw command bytes for the backlog/AOF
+        List<byte[]> parts = new ArrayList<>();
+        parts.add(cmdName.getBytes(StandardCharsets.UTF_8));
+        for (Object arg : args) {
+            if (arg instanceof String) {
+                parts.add(((String) arg).getBytes(StandardCharsets.UTF_8));
+            } else if (arg instanceof byte[]) {
+                parts.add((byte[]) arg);
+            } else {
+                parts.add(String.valueOf(arg).getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        byte[] serializedCmd = Resp.array(parts);
+        
+        WriteSequencer.getInstance().executeWrite(dbOp, serializedCmd);
+    }
     
     private String mixedArrayToString(List<Object> list, int level) {
         if (list == null || list.isEmpty()) return "(empty list or set)";
@@ -152,9 +177,10 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
 
     private boolean isWriteCommand(String cmd) {
         return Arrays.asList("SET", "DEL", "LPUSH", "RPUSH", "LPOP", "RPOP", 
-                             "HSET", "HDEL", "SADD", "SREM", "FLUSHALL", 
+                             "HSET", "HDEL", "SADD", "SREM", "FLUSHALL", "FLUSHDB",
                              "HINCRBY", "SISMEMBER", "SCARD", 
-                             "RENAME", "ZREM", "SETBIT").contains(cmd);
+                             "RENAME", "ZREM", "SETBIT", "INCR", "DECR", "EXPIRE", 
+                             "MSET", "ZADD", "ZINCRBY", "RPOPLPUSH", "LTRIM").contains(cmd);
     }
     
     private boolean isAdminCommand(String cmd) {
@@ -327,9 +353,12 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     }
 
                     // Identify if command needs exclusive write lock (Global Lock)
-                    boolean needsExclusive = Arrays.asList("RENAME", "MSET", "FLUSHALL", "BGREWRITEAOF").contains(cmd);
+                    // With Serialization Barrier Pattern, all writes must go through Sequencer,
+                    // which requires a Write Lock. To avoid upgrading Read->Write (Deadlock),
+                    // we must acquire WriteLock upfront for all write commands.
+                    boolean needsWriteLock = isWriteCommand(cmd) || Arrays.asList("BGREWRITEAOF").contains(cmd);
                     
-                    if (needsExclusive) {
+                    if (needsWriteLock) {
                         Carade.globalRWLock.writeLock().lock();
                         try {
                             executeCommand(parts, out, isResp);
@@ -564,14 +593,20 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String oldKey = new String(parts.get(1), StandardCharsets.UTF_8);
                     String newKey = new String(parts.get(2), StandardCharsets.UTF_8);
                     
-                    ValueEntry val = Carade.db.remove(dbIndex, oldKey);
-                    if (val == null) {
+                    final int[] success = {0};
+                    executeWrite(() -> {
+                        ValueEntry val = Carade.db.remove(dbIndex, oldKey);
+                        if (val != null) {
+                            Carade.db.put(dbIndex, newKey, val);
+                            Carade.notifyWatchers(oldKey);
+                            Carade.notifyWatchers(newKey);
+                            success[0] = 1;
+                        }
+                    }, "RENAME", oldKey, newKey);
+
+                    if (success[0] == 0) {
                         send(out, isResp, Resp.error("ERR no such key"), "(error) ERR no such key");
                     } else {
-                        Carade.db.put(dbIndex, newKey, val);
-                        Carade.notifyWatchers(oldKey);
-                        Carade.notifyWatchers(newKey);
-                        Carade.aofHandler.log("RENAME", oldKey, newKey);
                         send(out, isResp, Resp.simpleString("OK"), "OK");
                     }
                 }
@@ -586,42 +621,47 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     try {
                         int offset = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
                         int val = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
+                        String offsetStr = new String(parts.get(2), StandardCharsets.UTF_8);
+                        String valStr = new String(parts.get(3), StandardCharsets.UTF_8);
+
                         if (val != 0 && val != 1) {
                             send(out, isResp, Resp.error("ERR bit is not an integer or out of range"), "(error) ERR bit is not an integer or out of range");
                         } else if (offset < 0) {
                             send(out, isResp, Resp.error("ERR bit offset is not an integer or out of range"), "(error) ERR bit offset is not an integer or out of range");
                         } else {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                byte[] bytes;
-                                if (v == null) bytes = new byte[0];
-                                else if (v.type != DataType.STRING) throw new RuntimeException("WRONGTYPE");
-                                else bytes = (byte[]) v.value;
-                                
-                                int byteIndex = offset / 8;
-                                int bitIndex = 7 - (offset % 8);
-                                
-                                if (byteIndex < bytes.length) {
-                                    oldBit[0] = (bytes[byteIndex] >> bitIndex) & 1;
-                                } else {
-                                    oldBit[0] = 0;
-                                }
-                                
-                                if (byteIndex >= bytes.length) {
-                                    byte[] newBytes = new byte[byteIndex + 1];
-                                    System.arraycopy(bytes, 0, newBytes, 0, bytes.length);
-                                    bytes = newBytes;
-                                }
-                                
-                                if (val == 1) bytes[byteIndex] |= (1 << bitIndex);
-                                else bytes[byteIndex] &= ~(1 << bitIndex);
-                                
-                                ValueEntry newV = new ValueEntry(bytes, DataType.STRING, -1);
-                                if (v != null) newV.expireAt = v.expireAt;
-                                newV.touch();
-                                return newV;
-                            });
-                            Carade.notifyWatchers(key);
-                            Carade.aofHandler.log("SETBIT", key, String.valueOf(offset), String.valueOf(val));
+                            executeWrite(() -> {
+                                Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                    byte[] bytes;
+                                    if (v == null) bytes = new byte[0];
+                                    else if (v.type != DataType.STRING) throw new RuntimeException("WRONGTYPE");
+                                    else bytes = (byte[]) v.value;
+                                    
+                                    int byteIndex = offset / 8;
+                                    int bitIndex = 7 - (offset % 8);
+                                    
+                                    if (byteIndex < bytes.length) {
+                                        oldBit[0] = (bytes[byteIndex] >> bitIndex) & 1;
+                                    } else {
+                                        oldBit[0] = 0;
+                                    }
+                                    
+                                    if (byteIndex >= bytes.length) {
+                                        byte[] newBytes = new byte[byteIndex + 1];
+                                        System.arraycopy(bytes, 0, newBytes, 0, bytes.length);
+                                        bytes = newBytes;
+                                    }
+                                    
+                                    if (val == 1) bytes[byteIndex] |= (1 << bitIndex);
+                                    else bytes[byteIndex] &= ~(1 << bitIndex);
+                                    
+                                    ValueEntry newV = new ValueEntry(bytes, DataType.STRING, -1);
+                                    if (v != null) newV.expireAt = v.expireAt;
+                                    newV.touch();
+                                    return newV;
+                                });
+                                Carade.notifyWatchers(key);
+                            }, "SETBIT", key, offsetStr, valStr);
+                            
                             send(out, isResp, Resp.integer(oldBit[0]), "(integer) " + oldBit[0]);
                         }
                     } catch (NumberFormatException e) {
@@ -665,23 +705,25 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
 
             case "MSET":
                 if (parts.size() < 3 || (parts.size() - 1) % 2 != 0) {
-                    send(out, isResp, Resp.error("wrong number of arguments for 'mset' command"), "(error) wrong number of arguments for 'mset' command");
+                    send(out, isResp, Resp.error("wrong number of arguments for 'mset' command"), "(error) usage: MSET key value [key value ...]");
                 } else {
                     Carade.performEvictionIfNeeded();
-                    for (int i = 1; i < parts.size(); i += 2) {
-                        String key = new String(parts.get(i), StandardCharsets.UTF_8);
-                        byte[] val = parts.get(i + 1);
-                        Carade.db.put(dbIndex, key, new ValueEntry(val, DataType.STRING, -1));
-                        Carade.notifyWatchers(key);
+                    
+                    Object[] logArgs = new Object[parts.size() - 1];
+                    for(int i=1; i<parts.size(); i++) {
+                        if ((i-1) % 2 == 0) logArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
+                        else logArgs[i-1] = parts.get(i);
                     }
-                    if (Carade.aofHandler != null) {
-                        Object[] logArgs = new Object[parts.size() - 1];
-                        for(int i=1; i<parts.size(); i++) {
-                            if ((i-1) % 2 == 0) logArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                            else logArgs[i-1] = parts.get(i);
+
+                    executeWrite(() -> {
+                        for (int i = 1; i < parts.size(); i += 2) {
+                            String key = new String(parts.get(i), StandardCharsets.UTF_8);
+                            byte[] val = parts.get(i + 1);
+                            Carade.db.put(dbIndex, key, new ValueEntry(val, DataType.STRING, -1));
+                            Carade.notifyWatchers(key);
                         }
-                        Carade.aofHandler.log("MSET", logArgs);
-                    }
+                    }, "MSET", logArgs);
+
                     send(out, isResp, Resp.simpleString("OK"), "OK");
                 }
                 break;
@@ -765,13 +807,19 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     try {
                         long seconds = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
+                        long expireAt = System.currentTimeMillis() + (seconds * 1000);
+                        
                         final int[] ret = {0};
-                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                            v.expireAt = System.currentTimeMillis() + (seconds * 1000);
-                            ret[0] = 1;
-                            return v;
-                        });
-                        if (ret[0] == 1) Carade.aofHandler.log("EXPIRE", key, String.valueOf(seconds));
+                        
+                        // Transform EXPIRE to PEXPIREAT (absolute time) for AOF/Replica
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
+                                v.expireAt = expireAt;
+                                ret[0] = 1;
+                                return v;
+                            });
+                        }, "PEXPIREAT", key, String.valueOf(expireAt));
+
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     } catch (NumberFormatException e) {
                         send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
@@ -817,30 +865,32 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     final long[] ret = {0};
                     try {
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            long val = 0;
-                            if (v == null) {
-                                val = 0;
-                            } else if (v.type != DataType.STRING) {
-                                throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
-                            } else {
-                                try {
-                                    val = Long.parseLong(new String((byte[])v.value, StandardCharsets.UTF_8));
-                                } catch (NumberFormatException e) {
-                                    throw new RuntimeException("ERR value is not an integer or out of range");
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                long val = 0;
+                                if (v == null) {
+                                    val = 0;
+                                } else if (v.type != DataType.STRING) {
+                                    throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
+                                } else {
+                                    try {
+                                        val = Long.parseLong(new String((byte[])v.value, StandardCharsets.UTF_8));
+                                    } catch (NumberFormatException e) {
+                                        throw new RuntimeException("ERR value is not an integer or out of range");
+                                    }
                                 }
-                            }
-                            
-                            if (cmd.equals("INCR")) val++; else val--;
-                            ret[0] = val;
-                            
-                            ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(StandardCharsets.UTF_8), DataType.STRING, -1);
-                            if (v != null) newV.expireAt = v.expireAt;
-                            newV.touch();
-                            return newV;
-                        });
-                        Carade.notifyWatchers(key);
-                        Carade.aofHandler.log(cmd, key);
+                                
+                                if (cmd.equals("INCR")) val++; else val--;
+                                ret[0] = val;
+                                
+                                ValueEntry newV = new ValueEntry(String.valueOf(val).getBytes(StandardCharsets.UTF_8), DataType.STRING, -1);
+                                if (v != null) newV.expireAt = v.expireAt;
+                                newV.touch();
+                                return newV;
+                            });
+                            Carade.notifyWatchers(key);
+                        }, cmd, key);
+                        
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     } catch (RuntimeException e) {
                         String msg = e.getMessage();
@@ -859,34 +909,33 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     Carade.performEvictionIfNeeded();
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     try {
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            ConcurrentLinkedDeque<String> list;
-                            if (v == null) {
-                                list = new ConcurrentLinkedDeque<>();
-                                v = new ValueEntry(list, DataType.LIST, -1);
-                            } else if (v.type != DataType.LIST) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                list = (ConcurrentLinkedDeque<String>) v.value;
-                            }
-                            
-                            for (int i = 2; i < parts.size(); i++) {
-                                String val = new String(parts.get(i), StandardCharsets.UTF_8);
-                                if (cmd.equals("LPUSH")) list.addFirst(val); else list.addLast(val);
-                            }
-                            
-                            v.touch(); // Update LRU
-                            return v;
-                        });
-                        
-                        Carade.notifyWatchers(key);
-
-                        // Log: cmd key v1 v2 ...
                         Object[] args = new Object[parts.size()-1];
                         for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                        Carade.aofHandler.log(cmd, args);
+
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                ConcurrentLinkedDeque<String> list;
+                                if (v == null) {
+                                    list = new ConcurrentLinkedDeque<>();
+                                    v = new ValueEntry(list, DataType.LIST, -1);
+                                } else if (v.type != DataType.LIST) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    list = (ConcurrentLinkedDeque<String>) v.value;
+                                }
+                                
+                                for (int i = 2; i < parts.size(); i++) {
+                                    String val = new String(parts.get(i), StandardCharsets.UTF_8);
+                                    if (cmd.equals("LPUSH")) list.addFirst(val); else list.addLast(val);
+                                }
+                                
+                                v.touch(); // Update LRU
+                                return v;
+                            });
+                            Carade.notifyWatchers(key);
+                            Carade.checkBlockers(key); // Notify waiters
+                        }, cmd, args);
                         
-                        Carade.checkBlockers(key); // Notify waiters
                         ValueEntry v = Carade.db.get(dbIndex, key);
                         int size = (v != null && v.value instanceof Deque) ? ((Deque)v.value).size() : 0;
                         send(out, isResp, Resp.integer(size), "(integer) " + size);
@@ -911,14 +960,25 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                             if (entry != null && entry.type == DataType.LIST) {
                                 ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
                                 if (!list.isEmpty()) {
-                                    String val = cmd.equals("BLPOP") ? list.pollFirst() : list.pollLast();
-                                    if (val != null) {
-                                        Carade.aofHandler.log(cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
-                                        if (list.isEmpty()) Carade.db.remove(dbIndex, k);
-                                        Carade.notifyWatchers(k);
+                                    final String[] valRef = {null};
+                                    final String finalKey = k;
+                                    
+                                    executeWrite(() -> {
+                                        ValueEntry e = Carade.db.get(dbIndex, finalKey);
+                                        if (e != null && e.type == DataType.LIST) {
+                                            ConcurrentLinkedDeque<String> l = (ConcurrentLinkedDeque<String>) e.value;
+                                            valRef[0] = cmd.equals("BLPOP") ? l.pollFirst() : l.pollLast();
+                                            if (valRef[0] != null) {
+                                                if (l.isEmpty()) Carade.db.remove(dbIndex, finalKey);
+                                                Carade.notifyWatchers(finalKey);
+                                            }
+                                        }
+                                    }, cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
+                                    
+                                    if (valRef[0] != null) {
                                         List<byte[]> resp = new ArrayList<>();
                                         resp.add(k.getBytes(StandardCharsets.UTF_8));
-                                        resp.add(val.getBytes(StandardCharsets.UTF_8));
+                                        resp.add(valRef[0].getBytes(StandardCharsets.UTF_8));
                                         send(out, isResp, Resp.array(resp), null);
                                         served = true;
                                         break;
@@ -960,6 +1020,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
                 else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                    // Read first to check existence (safe under Global Lock for write commands)
                     ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                     else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
@@ -967,11 +1028,23 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
                         if (list.isEmpty()) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                         else {
-                            String val = cmd.equals("LPOP") ? list.pollFirst() : list.pollLast(); 
+                            // We need to execute write atomically
+                            final String[] valRef = {null};
+                            executeWrite(() -> {
+                                // Re-check inside write context just in case (though we hold lock)
+                                ValueEntry e = Carade.db.get(dbIndex, key);
+                                if (e != null && e.type == DataType.LIST) {
+                                    ConcurrentLinkedDeque<String> l = (ConcurrentLinkedDeque<String>) e.value;
+                                    valRef[0] = cmd.equals("LPOP") ? l.pollFirst() : l.pollLast();
+                                    if (valRef[0] != null) {
+                                        if (l.isEmpty()) Carade.db.remove(dbIndex, key);
+                                        Carade.notifyWatchers(key);
+                                    }
+                                }
+                            }, cmd, key);
+
+                            String val = valRef[0];
                             if (val != null) {
-                                Carade.aofHandler.log(cmd, key);
-                                if (list.isEmpty()) Carade.db.remove(dbIndex, key); // Remove empty list
-                                Carade.notifyWatchers(key);
                                 send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
                             } else {
                                 send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
@@ -987,43 +1060,51 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String source = new String(parts.get(1), StandardCharsets.UTF_8);
                     String destination = new String(parts.get(2), StandardCharsets.UTF_8);
                     
-                    Carade.globalRWLock.writeLock().lock();
+                    final String[] valRef = {null};
                     try {
-                        ValueEntry entry = Carade.db.get(dbIndex, source);
-                        if (entry == null || entry.type != DataType.LIST) {
-                             if (entry != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                             else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                        } else {
-                            ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) entry.value;
-                            String val = srcList.pollLast();
-                            if (val == null) {
-                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
+                        executeWrite(() -> {
+                            ValueEntry entry = Carade.db.get(dbIndex, source);
+                            if (entry == null || entry.type != DataType.LIST) {
+                                // Will handle send outside or allow null valRef
                             } else {
-                                if (srcList.isEmpty()) Carade.db.remove(dbIndex, source);
-                                Carade.notifyWatchers(source);
-                                
-                                Carade.db.getStore(dbIndex).compute(destination, (k, v) -> {
-                                    if (v == null) {
-                                        ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
-                                        list.addFirst(val);
-                                        return new ValueEntry(list, DataType.LIST, -1);
-                                    } else if (v.type == DataType.LIST) {
-                                        ((ConcurrentLinkedDeque<String>) v.value).addFirst(val);
-                                        return v;
-                                    }
-                                    throw new RuntimeException("WRONGTYPE");
-                                });
-                                
-                                Carade.notifyWatchers(destination);
-                                Carade.aofHandler.log("RPOPLPUSH", source, destination);
-                                send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
+                                ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) entry.value;
+                                String val = srcList.pollLast();
+                                if (val != null) {
+                                    if (srcList.isEmpty()) Carade.db.remove(dbIndex, source);
+                                    Carade.notifyWatchers(source);
+                                    
+                                    Carade.db.getStore(dbIndex).compute(destination, (k, v) -> {
+                                        if (v == null) {
+                                            ConcurrentLinkedDeque<String> list = new ConcurrentLinkedDeque<>();
+                                            list.addFirst(val);
+                                            return new ValueEntry(list, DataType.LIST, -1);
+                                        } else if (v.type == DataType.LIST) {
+                                            ((ConcurrentLinkedDeque<String>) v.value).addFirst(val);
+                                            return v;
+                                        }
+                                        throw new RuntimeException("WRONGTYPE");
+                                    });
+                                    Carade.notifyWatchers(destination);
+                                    valRef[0] = val;
+                                }
                             }
+                        }, "RPOPLPUSH", source, destination);
+
+                        if (valRef[0] != null) {
+                            send(out, isResp, Resp.bulkString(valRef[0].getBytes(StandardCharsets.UTF_8)), valRef[0]);
+                        } else {
+                            // Check why it failed (wrong type or empty)
+                            // Since we are outside write lock now, state might have changed, but we only care if we actually did something.
+                            // If we didn't do anything, we check current state to send error or nil.
+                            // But we should have probably checked type inside.
+                            // For simplicity, re-check type:
+                            ValueEntry e = Carade.db.get(dbIndex, source);
+                            if (e != null && e.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                            else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
                         }
                     } catch (RuntimeException e) {
                         if (e.getMessage().equals("WRONGTYPE")) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                         else throw e;
-                    } finally {
-                        Carade.globalRWLock.writeLock().unlock();
                     }
                 }
                 break;
@@ -1041,38 +1122,37 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                          try {
                              int start = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
                              int stop = Integer.parseInt(new String(parts.get(3), StandardCharsets.UTF_8));
-                             ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.value;
-                             int size = list.size();
                              
-                             if (start < 0) start += size;
-                             if (stop < 0) stop += size;
-                             if (start < 0) start = 0;
-                             
-                             // Redis LTRIM behavior:
-                             // trim so that it contains elements from start to stop inclusive
-                             
-                             if (start > stop || start >= size) {
-                                 // Empty the list
-                                 list.clear();
-                                 Carade.db.remove(dbIndex, key);
-                             } else {
-                                 if (stop >= size) stop = size - 1;
-                                 
-                                 // Remove from head
-                                 for (int i = 0; i < start; i++) list.pollFirst();
-                                 
-                                 // Remove from tail
-                                 // Current size is (original_size - start)
-                                 // We want to keep (stop - start + 1) elements
-                                 int currentSize = list.size();
-                                 int keep = stop - start + 1;
-                                 int removeTail = currentSize - keep;
-                                 
-                                 for (int i = 0; i < removeTail; i++) list.pollLast();
-                             }
-                             
-                             Carade.notifyWatchers(key);
-                             Carade.aofHandler.log("LTRIM", key, String.valueOf(start), String.valueOf(stop));
+                             executeWrite(() -> {
+                                 ValueEntry e = Carade.db.get(dbIndex, key);
+                                 if (e != null && e.type == DataType.LIST) {
+                                     ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) e.value;
+                                     int size = list.size();
+                                     int s = start;
+                                     int st = stop;
+                                     
+                                     if (s < 0) s += size;
+                                     if (st < 0) st += size;
+                                     if (s < 0) s = 0;
+                                     
+                                     if (s > st || s >= size) {
+                                         list.clear();
+                                         Carade.db.remove(dbIndex, key);
+                                     } else {
+                                         if (st >= size) st = size - 1;
+                                         int keep = st - s + 1;
+                                         int currentSize = list.size(); // Recalculate size just in case
+                                         
+                                         // Remove from head
+                                         for (int i = 0; i < s; i++) list.pollFirst();
+                                         
+                                         // Remove from tail
+                                         int removeTail = list.size() - keep; // remaining size - keep
+                                         for (int i = 0; i < removeTail; i++) list.pollLast();
+                                     }
+                                     Carade.notifyWatchers(key);
+                                 }
+                             }, "LTRIM", key, String.valueOf(start), String.valueOf(stop));
                              
                              send(out, isResp, Resp.simpleString("OK"), "OK");
                          } catch (NumberFormatException e) {
@@ -1132,31 +1212,32 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     final int[] ret = {0}; // Number of fields added
                     try {
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            ConcurrentHashMap<String, String> map;
-                            if (v == null) {
-                                map = new ConcurrentHashMap<>();
-                                v = new ValueEntry(map, DataType.HASH, -1);
-                            } else if (v.type != DataType.HASH) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                map = (ConcurrentHashMap<String, String>) v.value;
-                            }
-                            
-                            for (int i = 2; i < parts.size(); i += 2) {
-                                String field = new String(parts.get(i), StandardCharsets.UTF_8);
-                                String val = new String(parts.get(i+1), StandardCharsets.UTF_8);
-                                if (map.put(field, val) == null) ret[0]++; 
-                            }
-                            
-                            v.touch();
-                            return v;
-                        });
-                        
-                        Carade.notifyWatchers(key);
                         String[] args = new String[parts.size()-1];
                         for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                        Carade.aofHandler.log("HSET", args);
+                        
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                ConcurrentHashMap<String, String> map;
+                                if (v == null) {
+                                    map = new ConcurrentHashMap<>();
+                                    v = new ValueEntry(map, DataType.HASH, -1);
+                                } else if (v.type != DataType.HASH) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    map = (ConcurrentHashMap<String, String>) v.value;
+                                }
+                                
+                                for (int i = 2; i < parts.size(); i += 2) {
+                                    String field = new String(parts.get(i), StandardCharsets.UTF_8);
+                                    String val = new String(parts.get(i+1), StandardCharsets.UTF_8);
+                                    if (map.put(field, val) == null) ret[0]++; 
+                                }
+                                
+                                v.touch();
+                                return v;
+                            });
+                            Carade.notifyWatchers(key);
+                        }, "HSET", (Object[]) args);
                         
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     } catch (RuntimeException e) {
@@ -1214,18 +1295,21 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String field = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
-                    Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                        if (v.type == DataType.HASH) {
-                            ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
-                            if (map.remove(field) != null) ret[0] = 1;
-                            if (map.isEmpty()) return null;
+                    
+                    executeWrite(() -> {
+                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
+                            if (v.type == DataType.HASH) {
+                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                                if (map.remove(field) != null) ret[0] = 1;
+                                if (map.isEmpty()) return null;
+                            }
+                            return v;
+                        });
+                        if (ret[0] == 1) {
+                            Carade.notifyWatchers(key);
                         }
-                        return v;
-                    });
-                    if (ret[0] == 1) {
-                        Carade.notifyWatchers(key);
-                        Carade.aofHandler.log("HDEL", key, field);
-                    }
+                    }, "HDEL", key, field);
+
                     send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                 }
                 break;
@@ -1239,31 +1323,35 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     final long[] ret = {0};
                     try {
                         long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            if (v == null) {
-                                ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
-                                map.put(field, String.valueOf(incr));
-                                ret[0] = incr;
-                                return new ValueEntry(map, DataType.HASH, -1);
-                            } else if (v.type != DataType.HASH) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
-                                map.compute(field, (f, val) -> {
-                                    long oldVal = 0;
-                                    if (val != null) {
-                                        try { oldVal = Long.parseLong(val); } catch (Exception e) { throw new RuntimeException("ERR hash value is not an integer"); }
-                                    }
-                                    long newVal = oldVal + incr;
-                                    ret[0] = newVal;
-                                    return String.valueOf(newVal);
-                                });
-                                v.touch();
-                                return v;
-                            }
-                        });
-                        Carade.notifyWatchers(key);
-                        Carade.aofHandler.log("HINCRBY", key, field, new String(parts.get(3), StandardCharsets.UTF_8));
+                        String incrStr = new String(parts.get(3), StandardCharsets.UTF_8);
+                        
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                if (v == null) {
+                                    ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
+                                    map.put(field, String.valueOf(incr));
+                                    ret[0] = incr;
+                                    return new ValueEntry(map, DataType.HASH, -1);
+                                } else if (v.type != DataType.HASH) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                                    map.compute(field, (f, val) -> {
+                                        long oldVal = 0;
+                                        if (val != null) {
+                                            try { oldVal = Long.parseLong(val); } catch (Exception e) { throw new RuntimeException("ERR hash value is not an integer"); }
+                                        }
+                                        long newVal = oldVal + incr;
+                                        ret[0] = newVal;
+                                        return String.valueOf(newVal);
+                                    });
+                                    v.touch();
+                                    return v;
+                                }
+                            });
+                            Carade.notifyWatchers(key);
+                        }, "HINCRBY", key, field, incrStr);
+                        
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     } catch (NumberFormatException e) {
                             send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
@@ -1285,24 +1373,26 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
                     try {
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            if (v == null) {
-                                Set<String> set = ConcurrentHashMap.newKeySet();
-                                set.add(member);
-                                ret[0] = 1;
-                                return new ValueEntry(set, DataType.SET, -1);
-                            } else if (v.type != DataType.SET) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                Set<String> set = (Set<String>) v.value;
-                                if (set.add(member)) ret[0] = 1;
-                                else ret[0] = 0;
-                                v.touch();
-                                return v;
-                            }
-                        });
-                        if (ret[0] == 1) Carade.notifyWatchers(key);
-                        Carade.aofHandler.log("SADD", key, member);
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                if (v == null) {
+                                    Set<String> set = ConcurrentHashMap.newKeySet();
+                                    set.add(member);
+                                    ret[0] = 1;
+                                    return new ValueEntry(set, DataType.SET, -1);
+                                } else if (v.type != DataType.SET) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    Set<String> set = (Set<String>) v.value;
+                                    if (set.add(member)) ret[0] = 1;
+                                    else ret[0] = 0;
+                                    v.touch();
+                                    return v;
+                                }
+                            });
+                            if (ret[0] == 1) Carade.notifyWatchers(key);
+                        }, "SADD", key, member);
+                        
                         send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                     } catch (RuntimeException e) {
                         send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
@@ -1340,18 +1430,21 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     String member = new String(parts.get(2), StandardCharsets.UTF_8);
                     final int[] ret = {0};
-                    Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                        if (v.type == DataType.SET) {
-                            Set<String> set = (Set<String>) v.value;
-                            if (set.remove(member)) ret[0] = 1;
-                            if (set.isEmpty()) return null;
+                    
+                    executeWrite(() -> {
+                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
+                            if (v.type == DataType.SET) {
+                                Set<String> set = (Set<String>) v.value;
+                                if (set.remove(member)) ret[0] = 1;
+                                if (set.isEmpty()) return null;
+                            }
+                            return v;
+                        });
+                        if (ret[0] == 1) {
+                             Carade.notifyWatchers(key);
                         }
-                        return v;
-                    });
-                    if (ret[0] == 1) {
-                         Carade.notifyWatchers(key);
-                         Carade.aofHandler.log("SREM", key, member);
-                    }
+                    }, "SREM", key, member);
+
                     send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                 }
                 break;
@@ -1475,12 +1568,22 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: DEL key"), "(error) usage: DEL key");
                 else { 
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry prev = Carade.db.remove(dbIndex, key);
-                    if (prev != null) {
-                        Carade.notifyWatchers(key);
-                        Carade.aofHandler.log("DEL", key);
-                    }
-                    send(out, isResp, Resp.integer(prev != null ? 1 : 0), "(integer) " + (prev != null ? 1 : 0));
+                    // Check existence first for proper return value (outside write lock is ok-ish but might race)
+                    // Better to just execute write and rely on remove returning previous value
+                    // BUT executeWrite Runnable doesn't return value easily to us here without hacks.
+                    // We can check existence first (atomic enough since we are about to delete)
+                    // OR we use a Ref object.
+                    
+                    final int[] ret = {0};
+                    executeWrite(() -> {
+                        ValueEntry prev = Carade.db.remove(dbIndex, key);
+                        if (prev != null) {
+                            Carade.notifyWatchers(key);
+                            ret[0] = 1;
+                        }
+                    }, "DEL", key);
+                    
+                    send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                 }
                 break;
             
@@ -1493,32 +1596,33 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         final int[] addedCount = {0};
                         try {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                CaradeZSet zset;
-                                if (v == null) {
-                                    zset = new CaradeZSet();
-                                    v = new ValueEntry(zset, DataType.ZSET, -1);
-                                } else if (v.type != DataType.ZSET) {
-                                    throw new RuntimeException("WRONGTYPE");
-                                } else {
-                                    zset = (CaradeZSet) v.value;
-                                }
-                                
-                                for (int i = 2; i < parts.size(); i += 2) {
-                                    try {
-                                        double score = Double.parseDouble(new String(parts.get(i), StandardCharsets.UTF_8));
-                                        String member = new String(parts.get(i+1), StandardCharsets.UTF_8);
-                                        addedCount[0] += zset.add(score, member);
-                                    } catch (Exception ex) {}
-                                }
-                                v.touch();
-                                return v;
-                            });
-                            
-                            Carade.notifyWatchers(key);
                             String[] args = new String[parts.size()-1];
                             for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                            Carade.aofHandler.log("ZADD", args);
+                            
+                            executeWrite(() -> {
+                                Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                    CaradeZSet zset;
+                                    if (v == null) {
+                                        zset = new CaradeZSet();
+                                        v = new ValueEntry(zset, DataType.ZSET, -1);
+                                    } else if (v.type != DataType.ZSET) {
+                                        throw new RuntimeException("WRONGTYPE");
+                                    } else {
+                                        zset = (CaradeZSet) v.value;
+                                    }
+                                    
+                                    for (int i = 2; i < parts.size(); i += 2) {
+                                        try {
+                                            double score = Double.parseDouble(new String(parts.get(i), StandardCharsets.UTF_8));
+                                            String member = new String(parts.get(i+1), StandardCharsets.UTF_8);
+                                            addedCount[0] += zset.add(score, member);
+                                        } catch (Exception ex) {}
+                                    }
+                                    v.touch();
+                                    return v;
+                                });
+                                Carade.notifyWatchers(key);
+                            }, "ZADD", (Object[]) args);
                             
                             send(out, isResp, Resp.integer(addedCount[0]), "(integer) " + addedCount[0]);
                         } catch (RuntimeException e) {
@@ -1681,22 +1785,25 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                      String key = new String(parts.get(1), StandardCharsets.UTF_8);
                      String member = new String(parts.get(2), StandardCharsets.UTF_8);
                      final int[] ret = {0};
-                     Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                         if (v.type == DataType.ZSET) {
-                             CaradeZSet zset = (CaradeZSet) v.value;
-                             Double score = zset.scores.remove(member);
-                             if (score != null) {
-                                 zset.sorted.remove(new ZNode(score, member));
-                                 ret[0] = 1;
+                     
+                     executeWrite(() -> {
+                         Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
+                             if (v.type == DataType.ZSET) {
+                                 CaradeZSet zset = (CaradeZSet) v.value;
+                                 Double score = zset.scores.remove(member);
+                                 if (score != null) {
+                                     zset.sorted.remove(new ZNode(score, member));
+                                     ret[0] = 1;
+                                 }
+                                 if (zset.scores.isEmpty()) return null;
                              }
-                             if (zset.scores.isEmpty()) return null;
+                             return v;
+                         });
+                         if (ret[0] == 1) {
+                             Carade.notifyWatchers(key);
                          }
-                         return v;
-                     });
-                     if (ret[0] == 1) {
-                         Carade.notifyWatchers(key);
-                         Carade.aofHandler.log("ZREM", key, member);
-                     }
+                     }, "ZREM", key, member);
+
                      send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
                  }
                  break;
@@ -1710,22 +1817,25 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     final double[] ret = {0.0};
                     try {
                         double incr = Double.parseDouble(new String(parts.get(2), StandardCharsets.UTF_8));
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            CaradeZSet zset;
-                            if (v == null) {
-                                zset = new CaradeZSet();
-                                v = new ValueEntry(zset, DataType.ZSET, -1);
-                            } else if (v.type != DataType.ZSET) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                zset = (CaradeZSet) v.value;
-                            }
-                            ret[0] = zset.incrBy(incr, member);
-                            v.touch();
-                            return v;
-                        });
-                        Carade.notifyWatchers(key);
-                        Carade.aofHandler.log("ZINCRBY", key, String.valueOf(incr), member);
+                        String incrStr = new String(parts.get(2), StandardCharsets.UTF_8);
+                        
+                        executeWrite(() -> {
+                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
+                                CaradeZSet zset;
+                                if (v == null) {
+                                    zset = new CaradeZSet();
+                                    v = new ValueEntry(zset, DataType.ZSET, -1);
+                                } else if (v.type != DataType.ZSET) {
+                                    throw new RuntimeException("WRONGTYPE");
+                                } else {
+                                    zset = (CaradeZSet) v.value;
+                                }
+                                ret[0] = zset.incrBy(incr, member);
+                                v.touch();
+                                return v;
+                            });
+                            Carade.notifyWatchers(key);
+                        }, "ZINCRBY", key, incrStr, member);
                         
                         String s = String.valueOf(ret[0]);
                         if (s.endsWith(".0")) s = s.substring(0, s.length()-2);
@@ -2019,19 +2129,21 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 break;
             case "DBSIZE": send(out, isResp, Resp.integer(Carade.db.size(dbIndex)), "(integer) " + Carade.db.size(dbIndex)); break;
             case "FLUSHALL": 
-                // Notify all watchers as all keys are gone
-                for (String k : Carade.watchers.keySet()) {
-                    Carade.notifyWatchers(k);
-                }
-                Carade.db.clearAll(); 
-                Carade.aofHandler.log("FLUSHALL");
+                executeWrite(() -> {
+                    // Notify all watchers as all keys are gone
+                    for (String k : Carade.watchers.keySet()) {
+                        Carade.notifyWatchers(k);
+                    }
+                    Carade.db.clearAll(); 
+                }, "FLUSHALL");
+                
                 send(out, isResp, Resp.simpleString("OK"), "OK"); 
                 break;
             case "FLUSHDB": 
-                // Notify watchers for this DB keys? Hard to track which key is in which DB from watchers map alone
-                // But for now, just clear
-                Carade.db.clear(dbIndex); 
-                Carade.aofHandler.log("FLUSHDB");
+                executeWrite(() -> {
+                     Carade.db.clear(dbIndex);
+                }, "FLUSHDB");
+                
                 send(out, isResp, Resp.simpleString("OK"), "OK"); 
                 break;
             case "BGREWRITEAOF":
