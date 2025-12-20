@@ -729,23 +729,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 }
                 break;
 
-            case "GET":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: GET key"), "(error) usage: GET key");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                    else { 
-                        if (entry.type != DataType.STRING && entry.type != null) {
-                            send(out, isResp, Resp.error("WRONGTYPE Operation against a key holding the wrong kind of value"), "(error) WRONGTYPE");
-                        } else {
-                            byte[] v = (byte[]) entry.getValue();
-                            send(out, isResp, Resp.bulkString(v), new String(v, StandardCharsets.UTF_8));
-                        }
-                    }
-                }
-                break;
-
             case "MGET":
                 if (parts.size() < 2) {
                     send(out, isResp, Resp.error("wrong number of arguments for 'mget' command"), "(error) wrong number of arguments for 'mget' command");
@@ -1016,45 +999,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 }
                 break;
 
-            case "LPOP":
-            case "RPOP":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: "+cmd+" key"), "(error) usage: "+cmd+" key");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    // Read first to check existence (safe under Global Lock for write commands)
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                    else if (entry.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                    else {
-                        ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.getValue();
-                        if (list.isEmpty()) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                        else {
-                            // We need to execute write atomically
-                            final String[] valRef = {null};
-                            executeWrite(() -> {
-                                // Re-check inside write context just in case (though we hold lock)
-                                ValueEntry e = Carade.db.get(dbIndex, key);
-                                if (e != null && e.type == DataType.LIST) {
-                                    ConcurrentLinkedDeque<String> l = (ConcurrentLinkedDeque<String>) e.getValue();
-                                    valRef[0] = cmd.equals("LPOP") ? l.pollFirst() : l.pollLast();
-                                    if (valRef[0] != null) {
-                                        if (l.isEmpty()) Carade.db.remove(dbIndex, key);
-                                        Carade.notifyWatchers(key);
-                                    }
-                                }
-                            }, cmd, key);
-
-                            String val = valRef[0];
-                            if (val != null) {
-                                send(out, isResp, Resp.bulkString(val.getBytes(StandardCharsets.UTF_8)), val);
-                            } else {
-                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                            }
-                        }
-                    }
-                }
-                break;
-            
             case "RPOPLPUSH":
                 if (parts.size() < 3) send(out, isResp, Resp.error("usage: RPOPLPUSH source destination"), "(error) usage: RPOPLPUSH source destination");
                 else {
@@ -1205,63 +1149,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 break;
 
             // --- HASHES ---
-            case "HSET":
-                if (parts.size() < 4 || (parts.size() - 2) % 2 != 0) {
-                    send(out, isResp, Resp.error("usage: HSET key field value [field value ...]"), "(error) usage: HSET key field value [field value ...]");
-                } else {
-                    Carade.performEvictionIfNeeded();
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    final int[] ret = {0}; // Number of fields added
-                    try {
-                        String[] args = new String[parts.size()-1];
-                        for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                        
-                        executeWrite(() -> {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                ConcurrentHashMap<String, String> map;
-                                if (v == null) {
-                                    map = new ConcurrentHashMap<>();
-                                    v = new ValueEntry(map, DataType.HASH, -1);
-                                } else if (v.type != DataType.HASH) {
-                                    throw new RuntimeException("WRONGTYPE");
-                                } else {
-                                    map = (ConcurrentHashMap<String, String>) v.getValue();
-                                }
-                                
-                                for (int i = 2; i < parts.size(); i += 2) {
-                                    String field = new String(parts.get(i), StandardCharsets.UTF_8);
-                                    String val = new String(parts.get(i+1), StandardCharsets.UTF_8);
-                                    if (map.put(field, val) == null) ret[0]++; 
-                                }
-                                
-                                v.touch();
-                                return v;
-                            });
-                            Carade.notifyWatchers(key);
-                        }, "HSET", (Object[]) args);
-                        
-                        send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                    } catch (RuntimeException e) {
-                        send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                    }
-                }
-                break;
-                
-            case "HGET":
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: HGET key field"), "(error) usage: HGET key field");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                    else {
-                        ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.getValue();
-                        String val = map.get(field);
-                        send(out, isResp, Resp.bulkString(val != null ? val.getBytes(StandardCharsets.UTF_8) : null), val != null ? val : "(nil)");
-                    }
-                }
-                break;
-                
             case "HGETALL":
                 if (parts.size() < 2) send(out, isResp, Resp.error("usage: HGETALL key"), "(error) usage: HGETALL key");
                 else {
@@ -1565,29 +1452,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 }
                 break;
 
-            case "DEL":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: DEL key"), "(error) usage: DEL key");
-                else { 
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    // Check existence first for proper return value (outside write lock is ok-ish but might race)
-                    // Better to just execute write and rely on remove returning previous value
-                    // BUT executeWrite Runnable doesn't return value easily to us here without hacks.
-                    // We can check existence first (atomic enough since we are about to delete)
-                    // OR we use a Ref object.
-                    
-                    final int[] ret = {0};
-                    executeWrite(() -> {
-                        ValueEntry prev = Carade.db.remove(dbIndex, key);
-                        if (prev != null) {
-                            Carade.notifyWatchers(key);
-                            ret[0] = 1;
-                        }
-                    }, "DEL", key);
-                    
-                    send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                }
-                break;
-            
             // --- SORTED SETS ---
             case "ZADD":
                 if (parts.size() < 4 || (parts.size() - 2) % 2 != 0) {

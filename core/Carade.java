@@ -4,6 +4,12 @@ import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.commands.CommandRegistry;
 import core.commands.string.SetCommand;
+import core.commands.string.GetCommand;
+import core.commands.generic.DelCommand;
+import core.commands.list.LPopCommand;
+import core.commands.list.RPopCommand;
+import core.commands.hash.HSetCommand;
+import core.commands.hash.HGetCommand;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.persistence.CommandLogger;
@@ -138,6 +144,12 @@ public class Carade {
         
         // Register Commands
         CommandRegistry.register("SET", new SetCommand());
+        CommandRegistry.register("GET", new GetCommand());
+        CommandRegistry.register("DEL", new DelCommand());
+        CommandRegistry.register("LPOP", new LPopCommand());
+        CommandRegistry.register("RPOP", new RPopCommand());
+        CommandRegistry.register("HSET", new HSetCommand());
+        CommandRegistry.register("HGET", new HGetCommand());
 
         // Load Config
         config = Config.load("carade.conf");
@@ -334,6 +346,36 @@ public class Carade {
                         });
                     }
                     break;
+                case "GEOADD":
+                    if (parts.size() >= 5) {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        try {
+                            db.getStore(replayDbIndex).compute(key, (k, v) -> {
+                                CaradeZSet zset;
+                                if (v == null) {
+                                    zset = new CaradeZSet();
+                                    v = new ValueEntry(zset, DataType.ZSET, -1);
+                                } else if (v.type == DataType.ZSET) {
+                                    zset = (CaradeZSet)v.getValue();
+                                } else {
+                                    return v;
+                                }
+                                
+                                int argIndex = 2;
+                                while (argIndex < parts.size()) {
+                                    try {
+                                        double lon = Double.parseDouble(new String(parts.get(argIndex++), StandardCharsets.UTF_8));
+                                        double lat = Double.parseDouble(new String(parts.get(argIndex++), StandardCharsets.UTF_8));
+                                        String member = new String(parts.get(argIndex++), StandardCharsets.UTF_8);
+                                        long hash = core.utils.GeoUtils.encode(lat, lon);
+                                        zset.add((double)hash, member);
+                                    } catch (Exception ex) {}
+                                }
+                                return v;
+                            });
+                        } catch (Exception e) {}
+                    }
+                    break;
                 case "ZADD":
                     if (parts.size() >= 4) {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
@@ -517,6 +559,30 @@ public class Carade {
                             if (v != null) newV.expireAt = v.expireAt;
                             return newV;
                         });
+                    }
+                    break;
+                case "EXPIREAT":
+                    if (parts.size() >= 3) {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        try {
+                            long timestamp = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
+                            db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
+                                v.expireAt = timestamp * 1000;
+                                return v;
+                            });
+                        } catch (Exception e) {}
+                    }
+                    break;
+                case "PEXPIREAT":
+                    if (parts.size() >= 3) {
+                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
+                        try {
+                            long timestamp = Long.parseLong(new String(parts.get(2), StandardCharsets.UTF_8));
+                            db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
+                                v.expireAt = timestamp;
+                                return v;
+                            });
+                        } catch (Exception e) {}
                     }
                     break;
                 case "EXPIRE":
