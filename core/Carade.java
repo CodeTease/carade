@@ -129,7 +129,8 @@ public class Carade {
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
                 " :: Carade ::       (v0.2.0) \n" +
-                " :: Engine ::       Java \n");
+                " :: Engine ::       Java \n" +
+                " :: Author ::       CodeTease \n");
     }
 
     public static void main(String[] args) {
@@ -570,11 +571,10 @@ public class Carade {
                 Map.Entry<String, ValueEntry> entry = it.next();
                 if (entry.getValue().isExpired()) {
                     it.remove();
-                    if (aofHandler != null) {
-                        // TODO: Log SELECT if needed?
-                        // For now we assume AOF logic handles context or we just log DEL
-                        aofHandler.log("DEL", entry.getKey()); 
-                    }
+                if (aofHandler != null) {
+                    aofHandler.log("SELECT", String.valueOf(i)); 
+                    aofHandler.log("DEL", entry.getKey()); 
+                }
                     removed++;
                 }
             }
