@@ -138,7 +138,7 @@ Connect via `redis-cli -p 63790` or `telnet`.
 
 * `benchmark.py`: Stress tester. (Legacy script)
 * `chat.py`: Demo chat app.
-* `r.py`: Simple Redis REPL for testing purpose. (Ensure installed redis-py using `pip install redis`).
+* `ping.py`: Send a test `PING` command.
 
 ## License
 
