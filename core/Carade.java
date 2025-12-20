@@ -86,7 +86,7 @@ public class Carade {
             while (!q.isEmpty()) {
                 ValueEntry v = db.get(key);
                 if (v == null || v.type != DataType.LIST) return;
-                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
                 if (list.isEmpty()) return;
                 
                 BlockingRequest req = q.peek();
@@ -222,7 +222,7 @@ public class Carade {
     // Internal AOF Replay State
     private static int replayDbIndex = 0;
 
-    private static void executeInternal(List<byte[]> parts) {
+    public static void executeInternal(List<byte[]> parts) {
         if (parts.isEmpty()) return;
         String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
         try {
@@ -256,7 +256,7 @@ public class Carade {
                              db.getStore(replayDbIndex).compute(key, (k, v) -> {
                                  byte[] bytes;
                                  if (v == null) bytes = new byte[0];
-                                 else if (v.type == DataType.STRING) bytes = (byte[]) v.value;
+                                 else if (v.type == DataType.STRING) bytes = (byte[]) v.getValue();
                                  else return v;
                                  
                                  int byteIndex = offset / 8;
@@ -293,7 +293,7 @@ public class Carade {
                         String field = new String(parts.get(2), StandardCharsets.UTF_8);
                         db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.HASH) {
-                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
                                 map.remove(field);
                                 if (map.isEmpty()) return null;
                             }
@@ -307,7 +307,7 @@ public class Carade {
                          String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.SET) {
-                                Set<String> set = (Set<String>) v.value;
+                                Set<String> set = (Set<String>) v.getValue();
                                 set.remove(member);
                                 if (set.isEmpty()) return null;
                             }
@@ -321,7 +321,7 @@ public class Carade {
                          String member = new String(parts.get(2), StandardCharsets.UTF_8);
                          db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.ZSET) {
-                                CaradeZSet zset = (CaradeZSet) v.value;
+                                CaradeZSet zset = (CaradeZSet) v.getValue();
                                 Double score = zset.scores.remove(member);
                                 if (score != null) {
                                      zset.sorted.remove(new ZNode(score, member));
@@ -342,7 +342,7 @@ public class Carade {
                                      zset = new CaradeZSet();
                                      v = new ValueEntry(zset, DataType.ZSET, -1);
                                  } else if (v.type == DataType.ZSET) {
-                                     zset = (CaradeZSet)v.value;
+                                     zset = (CaradeZSet)v.getValue();
                                  } else {
                                      return v;
                                  }
@@ -371,7 +371,7 @@ public class Carade {
                                      zset = new CaradeZSet();
                                      v = new ValueEntry(zset, DataType.ZSET, -1);
                                  } else if (v.type == DataType.ZSET) {
-                                     zset = (CaradeZSet)v.value;
+                                     zset = (CaradeZSet)v.getValue();
                                  } else {
                                      return v;
                                  }
@@ -403,7 +403,7 @@ public class Carade {
                                 list.add(val);
                                 return new ValueEntry(list, DataType.LIST, -1);
                             } else if (v.type == DataType.LIST) {
-                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
                                 if (cmd.equals("LPUSH")) list.addFirst(val); else list.addLast(val);
                                 return v;
                             }
@@ -417,7 +417,7 @@ public class Carade {
                         String key = new String(parts.get(1), StandardCharsets.UTF_8);
                         db.getStore(replayDbIndex).computeIfPresent(key, (k, v) -> {
                             if (v.type == DataType.LIST) {
-                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.value;
+                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
                                 if (!list.isEmpty()) {
                                     if (cmd.equals("LPOP")) list.pollFirst(); else list.pollLast();
                                 }
@@ -438,7 +438,7 @@ public class Carade {
                                 map.put(field, val);
                                 return new ValueEntry(map, DataType.HASH, -1);
                             } else if (v.type == DataType.HASH) {
-                                ((ConcurrentHashMap<String, String>) v.value).put(field, val);
+                                ((ConcurrentHashMap<String, String>) v.getValue()).put(field, val);
                             }
                             return v;
                         });
@@ -458,7 +458,7 @@ public class Carade {
                                 } else if (v.type != DataType.HASH) {
                                     return v;
                                 } else {
-                                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.value;
+                                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
                                     map.compute(field, (f, val) -> {
                                         long oldVal = 0;
                                         if (val != null) {
@@ -483,7 +483,7 @@ public class Carade {
                                 set.add(member);
                                 return new ValueEntry(set, DataType.SET, -1);
                             } else if (v.type == DataType.SET) {
-                                ((Set<String>) v.value).add(member);
+                                ((Set<String>) v.getValue()).add(member);
                             }
                             return v;
                         });
@@ -505,7 +505,7 @@ public class Carade {
                                 val = 0;
                             } else if (v.type == DataType.STRING) {
                                 try {
-                                    val = Long.parseLong(new String((byte[])v.value, java.nio.charset.StandardCharsets.UTF_8));
+                                    val = Long.parseLong(new String((byte[])v.getValue(), java.nio.charset.StandardCharsets.UTF_8));
                                 } catch (Exception e) { return v; } 
                             } else {
                                 return v;
@@ -535,7 +535,7 @@ public class Carade {
                         String dest = new String(parts.get(2), StandardCharsets.UTF_8);
                         ValueEntry srcEntry = db.get(replayDbIndex, source);
                         if (srcEntry != null && srcEntry.type == DataType.LIST) {
-                            ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) srcEntry.value;
+                            ConcurrentLinkedDeque<String> srcList = (ConcurrentLinkedDeque<String>) srcEntry.getValue();
                             if (!srcList.isEmpty()) {
                                 String val = srcList.pollLast();
                                 if (srcList.isEmpty()) db.remove(replayDbIndex, source);
@@ -546,7 +546,7 @@ public class Carade {
                                         list.addFirst(val);
                                         return new ValueEntry(list, DataType.LIST, -1);
                                     } else if (v.type == DataType.LIST) {
-                                        ((ConcurrentLinkedDeque<String>) v.value).addFirst(val);
+                                        ((ConcurrentLinkedDeque<String>) v.getValue()).addFirst(val);
                                         return v;
                                     }
                                     return v;
@@ -710,8 +710,8 @@ public class Carade {
                         db.put(key, new ValueEntry(((String) val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
                     } else if (val instanceof ValueEntry) {
                         ValueEntry ve = (ValueEntry) val;
-                        if (ve.type == DataType.STRING && ve.value instanceof String) {
-                            ve.value = ((String) ve.value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        if (ve.type == DataType.STRING && ve.getValue() instanceof String) {
+                            ve.setValue(((String) ve.getValue()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         }
                         db.put(key, ve);
                     }

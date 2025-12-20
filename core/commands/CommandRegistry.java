@@ -6,6 +6,7 @@ import core.commands.generic.*;
 import core.commands.server.ConfigGetCommand;
 import core.commands.connection.*;
 import core.commands.geo.*;
+import core.commands.replication.*;
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -35,6 +36,13 @@ public class CommandRegistry {
         
         // Connection
         register("SELECT", new SelectCommand());
+
+        // Replication
+        register("REPLICAOF", new ReplicaOfCommand());
+        register("SLAVEOF", new ReplicaOfCommand());
+        register("PSYNC", new PsyncCommand());
+        register("SYNC", new PsyncCommand());
+        register("REPLCONF", new ReplconfCommand());
         
         // CLIENT command router
         register("CLIENT", new Command() {

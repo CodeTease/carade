@@ -10,6 +10,7 @@ public class Config {
     public int port = 63790;
     public String password = "teasertopsecret";
     public long maxMemory = 0; // 0 = unlimited
+    public String maxMemoryPolicy = "noeviction"; // allkeys-lru, volatile-lru, allkeys-random, volatile-random, noeviction
     public Map<String, User> users = new HashMap<>();
 
     public static class User {
@@ -52,6 +53,7 @@ public class Config {
                         config.users.get("default").password = val;
                         break;
                     case "maxmemory": config.maxMemory = parseMemory(val); break;
+                    case "maxmemory-policy": config.maxMemoryPolicy = val; break;
                     case "user":
                         // format: user <name> <password> <admin|readwrite|readonly>
                         String[] uParts = val.split("\\s+");

@@ -5,15 +5,13 @@ import core.persistence.CommandLogger;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import core.Carade; 
 
 public class CaradeDatabase {
     // Array of databases
     public static final int DB_COUNT = 16;
     public final ConcurrentHashMap<String, ValueEntry>[] databases;
     
-    // Legacy public access to store (mapped to DB 0 for backward compatibility if accessed directly, 
-    // but we should try to avoid direct access)
-    // Deprecated: Use getStorage(int dbIndex) instead
     public final ConcurrentHashMap<String, ValueEntry> store; 
 
     private static CaradeDatabase INSTANCE;
@@ -37,7 +35,7 @@ public class CaradeDatabase {
         for (int i = 0; i < DB_COUNT; i++) {
             this.databases[i] = new ConcurrentHashMap<>();
         }
-        this.store = this.databases[0]; // Default to DB 0 for legacy access
+        this.store = this.databases[0]; 
         INSTANCE = this;
     }
 
@@ -51,7 +49,8 @@ public class CaradeDatabase {
         ValueEntry v = db.get(key);
         if (v != null) {
             if (v.isExpired()) {
-                remove(dbIndex, key);
+                remove(dbIndex, key); 
+                notify(dbIndex, key, "expired");
                 return null;
             }
             v.touch();
@@ -59,30 +58,41 @@ public class CaradeDatabase {
         return v;
     }
     
-    // Overload for default DB 0
     public ValueEntry get(String key) {
         return get(0, key);
     }
 
     public void put(int dbIndex, String key, ValueEntry value) {
         performEvictionIfNeeded(dbIndex);
+        boolean exists = getStore(dbIndex).containsKey(key);
         getStore(dbIndex).put(key, value);
+        notify(dbIndex, key, exists ? "set" : "new"); 
     }
     
-    // Overload for default DB 0
     public void put(String key, ValueEntry value) {
         put(0, key, value);
     }
     
     public ValueEntry remove(int dbIndex, String key) {
         ValueEntry v = getStore(dbIndex).remove(key);
-        // AOF logging is handled at command level usually
+        if (v != null) {
+            notify(dbIndex, key, "del");
+        }
         return v;
     }
     
-    // Overload for default DB 0
     public ValueEntry remove(String key) {
         return remove(0, key);
+    }
+    
+    private void notify(int dbIndex, String key, String event) {
+        try {
+            if (Carade.pubSub == null) return; 
+            String channelKey = "__keyspace@" + dbIndex + "__:" + key;
+            String channelEvent = "__keyevent@" + dbIndex + "__:" + event;
+            Carade.pubSub.publish(channelKey, event);
+            Carade.pubSub.publish(channelEvent, key);
+        } catch (Exception e) {}
     }
     
     public void performEvictionIfNeeded(int dbIndex) {
@@ -91,32 +101,49 @@ public class CaradeDatabase {
         long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         if (used < config.maxMemory) return;
         
-        System.out.println("🧹 [Eviction][DB"+dbIndex+"] Memory full (" + (used/1024/1024) + "MB > " + (config.maxMemory/1024/1024) + "MB). Evicting...");
+        String policy = config.maxMemoryPolicy;
+        if (policy.equals("noeviction")) return;
+        
+        System.out.println("🧹 [Eviction][DB"+dbIndex+"] Policy: " + policy + ". Usage: " + (used/1024/1024) + "MB");
         
         ConcurrentHashMap<String, ValueEntry> db = getStore(dbIndex);
         int attempts = 0;
         Iterator<String> it = db.keySet().iterator();
+        
         while (used > config.maxMemory && !db.isEmpty() && attempts < 100) {
             String bestKey = null;
-            long oldestTime = Long.MAX_VALUE;
             
-            int samples = 0;
-            while (it.hasNext() && samples < 5) {
-                String key = it.next();
-                ValueEntry v = db.get(key);
-                if (v != null) {
-                    if (v.lastAccessed < oldestTime) {
-                        oldestTime = v.lastAccessed;
-                        bestKey = key;
-                    }
+            if (policy.contains("random")) {
+                if (it.hasNext()) bestKey = it.next();
+                if (policy.contains("volatile")) {
+                    ValueEntry v = db.get(bestKey);
+                    if (v == null || v.expireAt == -1) bestKey = null;
                 }
-                samples++;
+            } else {
+                long oldestTime = Long.MAX_VALUE;
+                int samples = 0;
+                while (it.hasNext() && samples < 5) {
+                    String key = it.next();
+                    ValueEntry v = db.get(key);
+                    if (v != null) {
+                        boolean eligible = true;
+                        if (policy.contains("volatile") && v.expireAt == -1) eligible = false;
+                        
+                        if (eligible && v.lastAccessed < oldestTime) {
+                            oldestTime = v.lastAccessed;
+                            bestKey = key;
+                        }
+                    }
+                    samples++;
+                }
             }
-            if (!it.hasNext()) it = db.keySet().iterator();
+            
+            if (!it.hasNext()) it = db.keySet().iterator(); 
             
             if (bestKey != null) {
                 db.remove(bestKey);
-                if (aofHandler != null) aofHandler.log("DEL", bestKey); // Note: AOF might need SELECT context
+                notify(dbIndex, bestKey, "evicted");
+                if (aofHandler != null) aofHandler.log("DEL", bestKey); 
             }
             
             used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
@@ -124,7 +151,6 @@ public class CaradeDatabase {
         }
     }
     
-    // Default eviction on DB 0
     public void performEvictionIfNeeded() {
         performEvictionIfNeeded(0);
     }
@@ -133,7 +159,6 @@ public class CaradeDatabase {
         return getStore(dbIndex).size();
     }
     
-    // Default size DB 0
     public int size() {
         return size(0);
     }
@@ -142,7 +167,6 @@ public class CaradeDatabase {
         getStore(dbIndex).clear();
     }
     
-    // Default clear DB 0
     public void clear() {
         clear(0);
     }
@@ -164,7 +188,14 @@ public class CaradeDatabase {
     public void cleanup() {
          long now = System.currentTimeMillis();
          for(int i=0; i<DB_COUNT; i++) {
-             databases[i].values().removeIf(v -> v.isExpired(now));
+             Iterator<Map.Entry<String, ValueEntry>> it = databases[i].entrySet().iterator();
+             while (it.hasNext()) {
+                 Map.Entry<String, ValueEntry> e = it.next();
+                 if (e.getValue().isExpired(now)) {
+                     it.remove();
+                     notify(i, e.getKey(), "expired");
+                 }
+             }
          }
     }
     
@@ -172,7 +203,6 @@ public class CaradeDatabase {
         return getStore(dbIndex).keySet();
     }
     
-    // Default keySet DB 0
     public Set<String> keySet() {
         return keySet(0);
     }
@@ -181,7 +211,6 @@ public class CaradeDatabase {
         return getStore(dbIndex).entrySet();
     }
     
-    // Default entrySet DB 0
     public Set<Map.Entry<String, ValueEntry>> entrySet() {
         return entrySet(0);
     }

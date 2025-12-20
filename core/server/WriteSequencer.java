@@ -1,7 +1,6 @@
 package core.server;
 
 import core.Carade;
-import core.commands.Command;
 import core.persistence.CommandLogger;
 import core.replication.ReplicationBacklog;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -56,6 +55,11 @@ public class WriteSequencer {
             // 3. Write to AOF
             if (commandLogger != null && commandBytes != null) {
                 commandLogger.log(commandBytes);
+            }
+
+            // 4. Propagate to Replicas
+            if (commandBytes != null) {
+                core.replication.ReplicationManager.getInstance().propagate(commandBytes);
             }
         } finally {
             lock.writeLock().unlock();
