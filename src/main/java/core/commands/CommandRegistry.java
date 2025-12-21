@@ -19,6 +19,7 @@ import core.commands.zset.*;
 import core.commands.hll.*;
 import core.commands.string.StrLenCommand;
 import core.commands.string.GetSetCommand;
+import core.commands.json.*;
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -56,6 +57,10 @@ public class CommandRegistry {
         // ZSet
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
         register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
+        
+        // JSON
+        register("JSON.SET", new JsonSetCommand());
+        register("JSON.GET", new JsonGetCommand());
         
         // HLL
         register("PFADD", new PfAddCommand());

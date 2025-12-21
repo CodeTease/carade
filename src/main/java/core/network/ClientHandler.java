@@ -35,6 +35,11 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     private String clientName = null;
     private Config.User currentUser = null; // null = not authenticated
     public int dbIndex = 0; // Current DB index
+    
+    public int getDbIndex() {
+        return dbIndex;
+    }
+    
     public boolean isSubscribed = false; // Accessible by Carade (hacky)
     private boolean currentIsResp = true; // Netty decoder implies RESP mode, but we might support legacy text
     
@@ -137,6 +142,10 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
 
     public void sendResponse(byte[] respData, String textData) {
         send(currentIsResp, respData, textData);
+    }
+    
+    public void sendSimpleString(String msg) {
+        send(currentIsResp, Resp.simpleString(msg), msg);
     }
 
     public void sendError(String msg) {

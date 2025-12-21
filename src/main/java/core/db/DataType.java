@@ -1,5 +1,5 @@
 package core.db;
 
 public enum DataType {
-    STRING, LIST, HASH, SET, ZSET, HYPERLOGLOG
+    STRING, LIST, HASH, SET, ZSET, HYPERLOGLOG, JSON
 }
