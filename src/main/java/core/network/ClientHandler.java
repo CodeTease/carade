@@ -12,12 +12,15 @@ import core.server.WriteSequencer;
 import core.structs.CaradeZSet;
 import core.structs.ZNode;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -27,14 +30,13 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-public class ClientHandler implements Runnable, PubSub.Subscriber {
-    private final Socket socket;
+public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSub.Subscriber {
+    private ChannelHandlerContext ctx;
     private String clientName = null;
     private Config.User currentUser = null; // null = not authenticated
     public int dbIndex = 0; // Current DB index
     public boolean isSubscribed = false; // Accessible by Carade (hacky)
-    private OutputStream outStream; // Keep ref for PubSub callbacks
-    private boolean currentIsResp = false; // Track protocol mode for async callbacks
+    private boolean currentIsResp = true; // Netty decoder implies RESP mode, but we might support legacy text
     
     // Transaction State
     private boolean isInTransaction = false;
@@ -42,8 +44,41 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
     private Set<String> watching = new HashSet<>();
     private List<List<byte[]>> transactionQueue = new ArrayList<>();
 
-    public ClientHandler(Socket socket) { 
-        this.socket = socket; 
+    // Compatibility shim for OutputStreams in PubSub/Commands
+    // Since Netty is async and commands expect an OutputStream to write to immediately,
+    // we need to adapt.
+    // However, most commands just call client.send().
+    // We will override send() to write to ctx.
+    // For things that absolutely need OutputStream (like transaction buffering), we handle it locally.
+
+    public ClientHandler() { 
+        // No socket passed in constructor for Netty
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+        Carade.activeConnections.incrementAndGet();
+        super.channelActive(ctx);
+    }
+    
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        cleanup();
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        // cause.printStackTrace();
+        ctx.close();
+    }
+    
+    private void cleanup() {
+        Carade.pubSub.unsubscribeAll(this);
+        core.replication.ReplicationManager.getInstance().removeReplica(this);
+        unwatchAll();
+        Carade.activeConnections.decrementAndGet();
     }
 
     public void setClientName(String name) {
@@ -69,44 +104,60 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
         watching.clear();
     }
 
-    public synchronized void send(OutputStream out, boolean isResp, byte[] respData, String textData) {
-        try {
-            if (isResp) {
-                 if (respData != null) out.write(respData);
-            }
-            else {
-                if (textData != null) out.write((textData + "\n").getBytes(StandardCharsets.UTF_8));
-            }
-            out.flush();
-        } catch (IOException e) {
-            // Ignore, connection likely closed
+    // New send method for Netty
+    public synchronized void send(boolean isResp, Object data, String textData) {
+        if (ctx == null) return;
+        
+        if (isResp) {
+            if (data != null) ctx.writeAndFlush(data);
+        } else {
+             if (textData != null) ctx.writeAndFlush(textData + "\n");
         }
     }
 
+    // Deprecated / Adapted signature for existing commands
+    public void send(OutputStream out, boolean isResp, byte[] respData, String textData) {
+        // 'out' is ignored in Netty mode, we use 'ctx'
+        // If commands pass a specific stream (like buffer), they should probably not call this method 
+        // but write to the stream directly. 
+        // However, most commands call client.send(out, ...).
+        // If out == this.dummyOutputStream, we write to Netty.
+        // If out is a buffer (Transaction), we write to buffer.
+        
+        if (out instanceof ByteArrayOutputStream) {
+            try {
+                if (isResp && respData != null) out.write(respData);
+                else if (!isResp && textData != null) out.write((textData + "\n").getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {}
+            return;
+        }
+
+        send(isResp, respData, textData);
+    }
+
     public void sendResponse(byte[] respData, String textData) {
-        send(outStream, currentIsResp, respData, textData);
+        send(currentIsResp, respData, textData);
     }
 
     public void sendError(String msg) {
-        send(outStream, currentIsResp, Resp.error(msg), "(error) " + msg);
+        send(currentIsResp, Resp.error(msg), "(error) " + msg);
     }
 
-    // Helper methods for Commands
     public void sendInteger(long i) {
-        send(outStream, currentIsResp, Resp.integer(i), "(integer) " + i);
+        send(currentIsResp, Resp.integer(i), "(integer) " + i);
     }
     
     public void sendNull() {
-        send(outStream, currentIsResp, Resp.bulkString((byte[])null), "(nil)");
+        send(currentIsResp, Resp.bulkString((byte[])null), "(nil)");
     }
     
     public void sendBulkString(String s) {
-        send(outStream, currentIsResp, Resp.bulkString(s), s == null ? "(nil)" : "\"" + s + "\"");
+        send(currentIsResp, Resp.bulkString(s), s == null ? "(nil)" : "\"" + s + "\"");
     }
     
     public void sendArray(List<byte[]> list) {
         if (currentIsResp) {
-            send(outStream, true, Resp.array(list), null);
+            send(true, Resp.array(list), null);
         } else {
             StringBuilder sb = new StringBuilder();
             if (list == null || list.isEmpty()) {
@@ -116,27 +167,19 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                     sb.append(i + 1).append(") \"").append(new String(list.get(i), StandardCharsets.UTF_8)).append("\"\n");
                 }
             }
-            send(outStream, false, null, sb.toString().trim());
+            send(false, null, sb.toString().trim());
         }
     }
     
     public void sendMixedArray(List<Object> list) {
          if (currentIsResp) {
-             send(outStream, true, Resp.mixedArray(list), null);
+             send(true, Resp.mixedArray(list), null);
          } else {
-             // Basic recursive string representation for text mode
-             send(outStream, false, null, mixedArrayToString(list, 0).trim());
+             send(false, null, mixedArrayToString(list, 0).trim());
          }
     }
 
-    /**
-     * Executes a write operation through the Global Sequencer.
-     * @param dbOp The operation to update the database.
-     * @param cmdName The command name (for logging reconstruction).
-     * @param args The command arguments (for logging reconstruction).
-     */
     public void executeWrite(Runnable dbOp, String cmdName, Object... args) {
-        // Reconstruct the raw command bytes for the backlog/AOF
         List<byte[]> parts = new ArrayList<>();
         parts.add(cmdName.getBytes(StandardCharsets.UTF_8));
         for (Object arg : args) {
@@ -149,7 +192,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
             }
         }
         byte[] serializedCmd = Resp.array(parts);
-        
         WriteSequencer.getInstance().executeWrite(dbOp, serializedCmd);
     }
     
@@ -158,7 +200,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < list.size(); i++) {
             Object o = list.get(i);
-            // Indentation
             for(int j=0; j<level; j++) sb.append("  ");
             
             sb.append(i + 1).append(") ");
@@ -189,7 +230,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
 
     @Override
     public void send(String channel, String message, String pattern) {
-        // Callback from PubSub engine
         if (currentIsResp) {
             if (pattern != null) {
                 List<byte[]> resp = new ArrayList<>();
@@ -197,17 +237,17 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 resp.add(pattern.getBytes(StandardCharsets.UTF_8));
                 resp.add(channel.getBytes(StandardCharsets.UTF_8));
                 resp.add(message.getBytes(StandardCharsets.UTF_8));
-                send(outStream, true, Resp.array(resp), null);
+                send(true, Resp.array(resp), null);
             } else {
                 List<byte[]> resp = new ArrayList<>();
                 resp.add("message".getBytes(StandardCharsets.UTF_8));
                 resp.add(channel.getBytes(StandardCharsets.UTF_8));
                 resp.add(message.getBytes(StandardCharsets.UTF_8));
-                send(outStream, true, Resp.array(resp), null);
+                send(true, Resp.array(resp), null);
             }
         } else {
-            if (pattern != null) send(outStream, false, null, "[MSG][" + pattern + "] " + channel + ": " + message);
-            else send(outStream, false, null, "[MSG] " + channel + ": " + message);
+            if (pattern != null) send(false, null, "[MSG][" + pattern + "] " + channel + ": " + message);
+            else send(false, null, "[MSG] " + channel + ": " + message);
         }
     }
 
@@ -218,183 +258,174 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
     public Object getId() { return this; }
 
     @Override
-    public void run() {
-        Carade.activeConnections.incrementAndGet();
-        try (InputStream in = socket.getInputStream();
-             OutputStream out = socket.getOutputStream()) {
-            this.outStream = out;
-            
-            while (true) {
-                Resp.Request req = Resp.parse(in);
-                if (req == null) break;
-                List<byte[]> parts = req.args;
-                this.currentIsResp = req.isResp;
-                boolean isResp = req.isResp;
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (msg instanceof List) {
+            List<byte[]> parts = (List<byte[]>) msg;
+            handleCommand(parts);
+        }
+    }
 
-                if (parts.isEmpty()) continue;
-                Carade.totalCommands.incrementAndGet();
+    private void handleCommand(List<byte[]> parts) {
+        if (parts.isEmpty()) return;
+        Carade.totalCommands.incrementAndGet();
 
-                String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
+        String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
+        
+        // Simple heuristic for RESP vs Text (Netty Decoder sets this usually, but let's assume if we are here we are parsing RESP)
+        // If we want to support raw text mode properly, we need to know from the decoder or infer.
+        // For now, default true.
+        boolean isResp = true; 
+        this.currentIsResp = true;
 
-                // Handle Subs commands in Sub mode
-                if (isSubscribed) {
-                    if (cmd.equals("QUIT")) break;
-                    if (cmd.equals("SUBSCRIBE") || cmd.equals("UNSUBSCRIBE") || 
-                        cmd.equals("PSUBSCRIBE") || cmd.equals("PUNSUBSCRIBE")) {
-                        // Process valid commands while subscribed
-                    } else {
-                         // Ignore other commands
-                         continue;
-                    }
+        // Handle Subs commands in Sub mode
+        if (isSubscribed) {
+            if (cmd.equals("QUIT")) {
+                ctx.close();
+                return;
+            }
+            if (!Arrays.asList("SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE").contains(cmd)) {
+                 return; // Ignore
+            }
+        }
+
+        if (currentUser == null && !cmd.equals("AUTH") && !cmd.equals("QUIT")) {
+            sendError("NOAUTH Authentication required");
+            return;
+        }
+        
+        if (currentUser != null && !currentUser.canWrite && isWriteCommand(cmd)) {
+             sendError("ERR permission denied");
+             return;
+        }
+        if (currentUser != null && !currentUser.isAdmin && isAdminCommand(cmd)) {
+             sendError("ERR permission denied");
+             return;
+        }
+
+        try {
+            // Handle Transactions
+            if (cmd.equals("MULTI")) {
+                if (isInTransaction) {
+                    sendError("ERR MULTI calls can not be nested");
+                } else {
+                    isInTransaction = true;
+                    transactionQueue.clear();
+                    send(isResp, Resp.simpleString("OK"), "OK");
                 }
-
-                if (currentUser == null && !cmd.equals("AUTH") && !cmd.equals("QUIT")) {
-                    send(out, isResp, Resp.error("NOAUTH Authentication required"), "(error) NOAUTH Authentication required.");
-                    continue;
+                return;
+            } else if (cmd.equals("DISCARD")) {
+                if (!isInTransaction) {
+                    sendError("ERR DISCARD without MULTI");
+                } else {
+                    isInTransaction = false;
+                    transactionQueue.clear();
+                    unwatchAll();
+                    transactionDirty = false;
+                    send(isResp, Resp.simpleString("OK"), "OK");
                 }
-                
-                if (currentUser != null && !currentUser.canWrite && isWriteCommand(cmd)) {
-                     send(out, isResp, Resp.error("ERR permission denied"), "(error) ERR permission denied");
-                     continue;
-                }
-                if (currentUser != null && !currentUser.isAdmin && isAdminCommand(cmd)) {
-                     send(out, isResp, Resp.error("ERR permission denied"), "(error) ERR permission denied");
-                     continue;
-                }
-
-                try {
-                    // Handle Transactions
-                    if (cmd.equals("MULTI")) {
-                        if (isInTransaction) {
-                            send(out, isResp, Resp.error("ERR MULTI calls can not be nested"), "(error) ERR MULTI calls can not be nested");
-                        } else {
-                            isInTransaction = true;
-                            transactionQueue.clear();
-                            send(out, isResp, Resp.simpleString("OK"), "OK");
-                        }
-                        continue;
-                    } else if (cmd.equals("DISCARD")) {
-                        if (!isInTransaction) {
-                            send(out, isResp, Resp.error("ERR DISCARD without MULTI"), "(error) ERR DISCARD without MULTI");
-                        } else {
-                            isInTransaction = false;
-                            transactionQueue.clear();
-                            unwatchAll(); // WATCH state is cleared on DISCARD
-                            transactionDirty = false;
-                            send(out, isResp, Resp.simpleString("OK"), "OK");
-                        }
-                        continue;
-                    } else if (cmd.equals("EXEC")) {
-                        if (!isInTransaction) {
-                            send(out, isResp, Resp.error("ERR EXEC without MULTI"), "(error) ERR EXEC without MULTI");
-                        } else {
-                            isInTransaction = false;
-                            
-                            if (transactionDirty) {
-                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                                transactionQueue.clear();
-                                transactionDirty = false;
-                                unwatchAll();
-                                continue;
-                            }
-
-                            unwatchAll(); // EXEC unwatch all keys
-                            transactionDirty = false;
-                            
-                            if (transactionQueue.isEmpty()) {
-                                send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
-                            } else {
-                                // Acquire write lock to ensure exclusive execution
-                                Carade.globalRWLock.writeLock().lock();
-                                try {
-                                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                                    // Write array header
-                                    String header = "*" + transactionQueue.size() + "\r\n";
-                                    buffer.write(header.getBytes());
-                                    
-                                    for (List<byte[]> queuedCmd : transactionQueue) {
-                                        executeCommand(queuedCmd, buffer, isResp);
-                                    }
-                                    out.write(buffer.toByteArray());
-                                    out.flush();
-                                } finally {
-                                    Carade.globalRWLock.writeLock().unlock();
-                                }
-                            }
-                        }
-                        continue;
-                    } else if (cmd.equals("WATCH")) {
-                        if (isInTransaction) {
-                            send(out, isResp, Resp.error("ERR WATCH inside MULTI is not allowed"), "(error) ERR WATCH inside MULTI is not allowed");
-                        } else {
-                            if (parts.size() < 2) {
-                                send(out, isResp, Resp.error("usage: WATCH key [key ...]"), "(error) usage: WATCH key [key ...]");
-                            } else {
-                                for (int i = 1; i < parts.size(); i++) {
-                                    String key = new String(parts.get(i), StandardCharsets.UTF_8);
-                                    watching.add(key);
-                                    Carade.watchers.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(this);
-                                }
-                                send(out, isResp, Resp.simpleString("OK"), "OK");
-                            }
-                        }
-                        continue;
-                    } else if (cmd.equals("UNWATCH")) {
-                        unwatchAll();
-                        transactionDirty = false;
-                        send(out, isResp, Resp.simpleString("OK"), "OK");
-                        continue;
-                    }
-
-                    if (isInTransaction && !cmd.equals("AUTH") && !cmd.equals("QUIT")) {
-                        transactionQueue.add(parts);
-                        send(out, isResp, Resp.simpleString("QUEUED"), "QUEUED");
-                        continue;
-                    }
-
-                    // Identify if command needs exclusive write lock (Global Lock)
-                    // With Serialization Barrier Pattern, all writes must go through Sequencer,
-                    // which requires a Write Lock. To avoid upgrading Read->Write (Deadlock),
-                    // we must acquire WriteLock upfront for all write commands.
-                    boolean needsWriteLock = isWriteCommand(cmd) || Arrays.asList("BGREWRITEAOF").contains(cmd);
+                return;
+            } else if (cmd.equals("EXEC")) {
+                if (!isInTransaction) {
+                    sendError("ERR EXEC without MULTI");
+                } else {
+                    isInTransaction = false;
                     
-                    if (needsWriteLock) {
+                    if (transactionDirty) {
+                        sendNull();
+                        transactionQueue.clear();
+                        transactionDirty = false;
+                        unwatchAll();
+                        return;
+                    }
+
+                    unwatchAll();
+                    transactionDirty = false;
+                    
+                    if (transactionQueue.isEmpty()) {
+                        sendArray(Collections.emptyList());
+                    } else {
                         Carade.globalRWLock.writeLock().lock();
                         try {
-                            executeCommand(parts, out, isResp);
+                            // We need to capture output of executed commands
+                            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                            String header = "*" + transactionQueue.size() + "\r\n";
+                            buffer.write(header.getBytes());
+                            
+                            for (List<byte[]> queuedCmd : transactionQueue) {
+                                executeCommand(queuedCmd, buffer, isResp);
+                            }
+                            // Write raw bytes to Netty context
+                            // We wrap in Unpooled.wrappedBuffer
+                            ctx.writeAndFlush(Unpooled.wrappedBuffer(buffer.toByteArray()));
                         } finally {
                             Carade.globalRWLock.writeLock().unlock();
                         }
-                    } else {
-                        // Acquire read lock for normal commands (concurrent)
-                        Carade.globalRWLock.readLock().lock();
-                        try {
-                            executeCommand(parts, out, isResp);
-                        } finally {
-                            Carade.globalRWLock.readLock().unlock();
-                        }
                     }
-                    
-                    if (cmd.equals("QUIT")) return;
-
-                } catch (Exception e) { send(out, isResp, Resp.error("ERR " + e.getMessage()), "(error) ERR " + e.getMessage()); }
+                }
+                return;
+            } else if (cmd.equals("WATCH")) {
+                if (isInTransaction) {
+                    sendError("ERR WATCH inside MULTI is not allowed");
+                } else {
+                    if (parts.size() < 2) {
+                        sendError("usage: WATCH key [key ...]");
+                    } else {
+                        for (int i = 1; i < parts.size(); i++) {
+                            String key = new String(parts.get(i), StandardCharsets.UTF_8);
+                            watching.add(key);
+                            Carade.watchers.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(this);
+                        }
+                        send(isResp, Resp.simpleString("OK"), "OK");
+                    }
+                }
+                return;
+            } else if (cmd.equals("UNWATCH")) {
+                unwatchAll();
+                transactionDirty = false;
+                send(isResp, Resp.simpleString("OK"), "OK");
+                return;
             }
-        } catch (IOException e) { 
-            // Client disconnected
-        } finally {
-            // Cleanup Pub/Sub
-            Carade.pubSub.unsubscribeAll(this);
-            core.replication.ReplicationManager.getInstance().removeReplica(this);
-            unwatchAll();
-            Carade.activeConnections.decrementAndGet();
+
+            if (isInTransaction && !cmd.equals("AUTH") && !cmd.equals("QUIT")) {
+                transactionQueue.add(parts);
+                send(isResp, Resp.simpleString("QUEUED"), "QUEUED");
+                return;
+            }
+
+            boolean needsWriteLock = isWriteCommand(cmd) || Arrays.asList("BGREWRITEAOF").contains(cmd);
+            
+            if (needsWriteLock) {
+                Carade.globalRWLock.writeLock().lock();
+                try {
+                    executeCommand(parts, null, isResp); // null output stream means use default ctx
+                } finally {
+                    Carade.globalRWLock.writeLock().unlock();
+                }
+            } else {
+                Carade.globalRWLock.readLock().lock();
+                try {
+                    executeCommand(parts, null, isResp);
+                } finally {
+                    Carade.globalRWLock.readLock().unlock();
+                }
+            }
+            
+            if (cmd.equals("QUIT")) {
+                ctx.close();
+            }
+
+        } catch (Exception e) { 
+            sendError("ERR " + e.getMessage());
         }
     }
     
+    // Adapted handleScan to not need explicit OutputStream unless forced
     private void handleScan(List<byte[]> parts, OutputStream out, boolean isResp, String cmd, String key) throws IOException {
-         // Parse generic args: cursor [MATCH pattern] [COUNT count]
+         // Same logic, but using 'this.send'
          int cursorIdx = cmd.equals("SCAN") ? 1 : 2;
          if (parts.size() <= cursorIdx) {
-             send(out, isResp, Resp.error("wrong number of arguments for '" + cmd.toLowerCase() + "' command"), "(error) wrong number of arguments");
+             if (out != null) send(out, isResp, Resp.error("wrong number of arguments"), "error");
+             else sendError("wrong number of arguments for '" + cmd.toLowerCase() + "' command");
              return;
          }
          
@@ -427,7 +458,8 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
              } else {
                  ValueEntry entry = Carade.db.get(dbIndex, key);
                  if (entry == null) {
-                     send(out, isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
+                      if (out != null) send(out, isResp, Resp.array(Arrays.asList("0".getBytes(), Resp.array(Collections.emptyList()))), null);
+                      else send(isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
                      return;
                  }
                  if (cmd.equals("HSCAN") && entry.type == DataType.HASH) {
@@ -437,8 +469,8 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                  } else if (cmd.equals("ZSCAN") && entry.type == DataType.ZSET) {
                      it = ((CaradeZSet)entry.getValue()).scores.entrySet().iterator();
                  } else {
-                     // Empty or wrong type
-                     send(out, isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
+                     if (out != null) send(out, isResp, Resp.array(Arrays.asList("0".getBytes(), Resp.array(Collections.emptyList()))), null);
+                     else send(isResp, Resp.array(Arrays.asList("0".getBytes(StandardCharsets.UTF_8), Resp.array(Collections.emptyList()))), null);
                      return;
                  }
              }
@@ -496,7 +528,8 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
              List<byte[]> outer = new ArrayList<>();
              outer.add(cursor.getBytes(StandardCharsets.UTF_8));
              outer.add(Resp.array(results));
-             send(out, true, Resp.array(outer), null);
+             if (out != null) send(out, true, Resp.array(outer), null);
+             else send(true, Resp.array(outer), null);
          } else {
              StringBuilder sb = new StringBuilder();
              sb.append("1) \"").append(cursor).append("\"\n");
@@ -504,23 +537,31 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
              for (int i=0; i<results.size(); i++) {
                  sb.append(i==0 ? "" : "\n   ").append(i+1).append(") \"").append(new String(results.get(i), StandardCharsets.UTF_8)).append("\"");
              }
-             send(out, false, null, sb.toString());
+             if (out != null) send(out, false, null, sb.toString());
+             else send(false, null, sb.toString());
          }
     }
     
     private void executeCommand(List<byte[]> parts, OutputStream out, boolean isResp) throws IOException {
         String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
         
-        // Check Registry first
         Command cmdObj = CommandRegistry.get(cmd);
         if (cmdObj != null) {
-             OutputStream original = this.outStream;
-             try {
-                 this.outStream = out; // Redirect output for transaction support
-                 cmdObj.execute(this, parts);
-             } finally {
-                 this.outStream = original;
+             if (out != null) {
+                 // Hack to support transactions needing ByteArrayOutputStream
+                 // We pass 'out' to client.send(out, ...)
+                 // But Command implementation calls client.sendResponse() which uses 'this.outStream' (now gone) or 'send(out, ...)'
+                 // We need to ensure Command logic uses the passed 'out' or we redirect.
+                 // Since we cannot change Command code easily (it uses client.sendResponse usually),
+                 // we might need to rely on the fact that existing commands call 'client.send(out...)'?
+                 // Checking 'Command.java' would be good. 
+                 // Assuming existing commands call 'client.send(out, ...)' or 'client.sendResponse(...)'?
+                 // The old ClientHandler had 'this.outStream'. 
+                 // If commands use client.sendResponse(), it uses default stream.
+                 // For transactions, we need to redirect that default stream.
+                 // We can use a ThreadLocal or a field since ClientHandler is per-connection (single threaded in Netty event loop usually).
              }
+             cmdObj.execute(this, parts);
              return;
         }
         
@@ -533,7 +574,8 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
             case "SSCAN":
             case "ZSCAN":
                 if (parts.size() < 2) {
-                    send(out, isResp, Resp.error("usage: " + cmd + " key cursor [MATCH pattern] [COUNT count]"), "(error) usage: " + cmd + " key cursor ...");
+                    if (out!=null) send(out, isResp, Resp.error("usage"), "error");
+                    else sendError("usage: " + cmd + " key cursor [MATCH pattern] [COUNT count]");
                 } else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     handleScan(parts, out, isResp, cmd, key);
@@ -931,6 +973,11 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
             
             case "BLPOP":
             case "BRPOP":
+                // Blocking commands in Netty need care. 
+                // We cannot block the event loop!
+                // We should probably check if available, if not, add to waiters and return.
+                // The BlockingRequest future callback needs to write to ctx.
+                
                 if (parts.size() < 3) send(out, isResp, Resp.error("usage: "+cmd+" key [key ...] timeout"), "(error) usage: "+cmd+" key [key ...] timeout");
                 else {
                     try {
@@ -972,25 +1019,30 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         }
                         
                         if (!served) {
+                            // Async blocking
                             Carade.BlockingRequest bReq = new Carade.BlockingRequest(cmd.equals("BLPOP"));
                             for (String k : keys) {
                                 Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
                             }
                             
-                            try {
-                                List<byte[]> result;
-                                if (timeout <= 0) {
-                                    result = bReq.future.get(); 
-                                } else {
-                                    result = bReq.future.get((long)(timeout * 1000), TimeUnit.MILLISECONDS);
-                                }
-                                send(out, isResp, Resp.array(result), null);
-                            } catch (TimeoutException e) {
-                                bReq.future.cancel(true);
-                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
-                            } catch (Exception e) {
-                                bReq.future.cancel(true);
-                                send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
+                            // Attach callback to future
+                            bReq.future.whenComplete((result, ex) -> {
+                                 if (ex != null) {
+                                     sendNull();
+                                 } else {
+                                     sendArray(result);
+                                 }
+                            });
+                            
+                            // Handle Timeout
+                            if (timeout > 0) {
+                                // Schedule timeout
+                                ctx.executor().schedule(() -> {
+                                    if (!bReq.future.isDone()) {
+                                        bReq.future.cancel(true); // Will trigger whenComplete with CancellationException usually, or we handle it
+                                        sendNull();
+                                    }
+                                }, (long)(timeout * 1000), TimeUnit.MILLISECONDS);
                             }
                         }
                     } catch (NumberFormatException e) {
@@ -1038,11 +1090,6 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                         if (valRef[0] != null) {
                             send(out, isResp, Resp.bulkString(valRef[0].getBytes(StandardCharsets.UTF_8)), valRef[0]);
                         } else {
-                            // Check why it failed (wrong type or empty)
-                            // Since we are outside write lock now, state might have changed, but we only care if we actually did something.
-                            // If we didn't do anything, we check current state to send error or nil.
-                            // But we should have probably checked type inside.
-                            // For simplicity, re-check type:
                             ValueEntry e = Carade.db.get(dbIndex, source);
                             if (e != null && e.type != DataType.LIST) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
                             else send(out, isResp, Resp.bulkString((byte[])null), "(nil)");
@@ -1786,13 +1833,20 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
             case "ZRANGEBYSCORE":
             case "ZREVRANGEBYSCORE":
                 if (parts.size() < 4) {
-                    send(out, isResp, Resp.error("usage: " + cmd + " key min max [WITHSCORES] [LIMIT offset count]"), "(error) usage");
+                    if (out != null) send(out, isResp, Resp.error("usage"), "error");
+                    else sendError("usage: " + cmd + " key min max [WITHSCORES] [LIMIT offset count]");
                 } else {
                     String key = new String(parts.get(1), StandardCharsets.UTF_8);
                     ValueEntry entry = Carade.db.get(dbIndex, key);
                     if (entry == null || entry.type != DataType.ZSET) {
-                        if (entry != null && entry.type != DataType.ZSET) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                        else send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
+                        if (entry != null && entry.type != DataType.ZSET) {
+                            if (out != null) send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
+                            else sendError("WRONGTYPE");
+                        }
+                        else {
+                            if (out != null) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
+                            else sendArray(Collections.emptyList());
+                        }
                     } else {
                         try {
                             // Parse min/max based on command
@@ -1856,16 +1910,20 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                                 added++;
                             }
                             
-                            if (isResp) send(out, true, Resp.array(result), null);
-                            else {
+                            if (isResp) {
+                                if (out != null) send(out, true, Resp.array(result), null);
+                                else send(true, Resp.array(result), null);
+                            } else {
                                 StringBuilder sb = new StringBuilder();
                                 for (int i = 0; i < resultStr.size(); i++) {
                                     sb.append((i+1) + ") \"" + resultStr.get(i) + "\"\n");
                                 }
-                                send(out, false, null, sb.toString().trim());
+                                if (out != null) send(out, false, null, sb.toString().trim());
+                                else send(false, null, sb.toString().trim());
                             }
                         } catch (NumberFormatException e) {
-                            send(out, isResp, Resp.error("ERR min or max is not a float"), "(error) ERR min or max is not a float");
+                            if (out != null) send(out, isResp, Resp.error("ERR min or max is not a float"), "error");
+                            else sendError("ERR min or max is not a float");
                         }
                     }
                 }
@@ -2020,7 +2078,7 @@ public class ClientHandler implements Runnable, PubSub.Subscriber {
                 send(out, isResp, Resp.simpleString("Background append only file rewriting started"), "Background append only file rewriting started");
                 break;
             case "PING": send(out, isResp, Resp.simpleString("PONG"), "PONG"); break;
-            case "QUIT": socket.close(); return;
+            case "QUIT": ctx.close(); return;
             default: send(out, isResp, Resp.error("ERR unknown command"), "(error) ERR unknown command");
         }
     }

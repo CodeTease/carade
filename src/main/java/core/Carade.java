@@ -17,6 +17,16 @@ import core.persistence.rdb.RdbEncoder;
 import core.persistence.rdb.RdbParser;
 import core.structs.CaradeZSet;
 import core.structs.ZNode;
+import core.protocol.netty.NettyRespDecoder;
+import core.protocol.netty.NettyRespEncoder;
+
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
 
 import java.io.*;
 import java.net.*;
@@ -135,11 +145,11 @@ public class Carade {
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
                 " :: Carade ::       (v0.2.0) \n" +
-                " :: Engine ::       Java \n" +
+                " :: Engine ::       Netty (Powered by Java 21) \n" +
                 " :: Author ::       CodeTease \n");
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         System.out.println("\n--- CARADE v0.2.0 (The 'Gossip' Universe) ---\n");
         
         // Register Commands
@@ -205,25 +215,38 @@ public class Carade {
 
         printBanner();
 
-        // 3. Start Server
-        try (ServerSocket server = new ServerSocket(config.port);
-             ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            
+        // 3. Start Netty Server
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(bossGroup, workerGroup)
+             .channel(NioServerSocketChannel.class)
+             .childHandler(new ChannelInitializer<SocketChannel>() {
+                 @Override
+                 public void initChannel(SocketChannel ch) throws Exception {
+                     ch.pipeline().addLast(new NettyRespDecoder());
+                     ch.pipeline().addLast(new NettyRespEncoder());
+                     ch.pipeline().addLast(new ClientHandler());
+                 }
+             });
+
+            ChannelFuture f = b.bind(config.port).sync();
             System.out.println("🔥 Ready on port " + config.port);
             System.out.println("🔒 Max Memory: " + (config.maxMemory == 0 ? "Unlimited" : config.maxMemory + " bytes"));
-
+            
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\n🛑 Shutting down...");
                 saveData();
                 aofHandler.close();
+                bossGroup.shutdownGracefully();
+                workerGroup.shutdownGracefully();
             }));
 
-            while (isRunning) {
-                Socket client = server.accept();
-                executor.execute(new ClientHandler(client));
-            }
-        } catch (IOException e) {
-            System.err.println("💥 Server crash: " + e.getMessage());
+            f.channel().closeFuture().sync();
+        } finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
         }
     }
 

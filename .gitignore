@@ -28,6 +28,7 @@ replay_pid*
 *.aof
 venv
 __pycache__
+target
 
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 
