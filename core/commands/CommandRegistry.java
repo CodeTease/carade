@@ -9,7 +9,12 @@ import core.commands.server.ConfigGetCommand;
 import core.commands.connection.*;
 import core.commands.geo.*;
 import core.commands.replication.*;
-import core.commands.hash.HmgetCommand;
+import core.commands.hash.*;
+import core.commands.list.*;
+import core.commands.set.*;
+import core.commands.zset.*;
+import core.commands.string.StrLenCommand;
+import core.commands.string.GetSetCommand;
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -23,7 +28,28 @@ public class CommandRegistry {
         register("SETNX", new SetNxCommand());
         register("INCRBY", new IncrByCommand());
         register("DECRBY", new DecrByCommand());
+        register("GETSET", new GetSetCommand());
+        register("STRLEN", new StrLenCommand());
+
+        // Hash
         register("HMGET", new HmgetCommand());
+        register("HLEN", new HLenCommand());
+        register("HKEYS", new HKeysCommand());
+        register("HVALS", new HValsCommand());
+        register("HEXISTS", new HExistsCommand());
+
+        // List
+        register("LLEN", new LLenCommand());
+        register("LINDEX", new LIndexCommand());
+        register("LREM", new LRemCommand());
+
+        // Set
+        register("SPOP", new SPopCommand());
+        register("SRANDMEMBER", new SRandMemberCommand());
+
+        // ZSet
+        register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
+        register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
         
         // Time / Generic
         register("PEXPIRE", new PexpireCommand());
@@ -31,6 +57,7 @@ public class CommandRegistry {
         register("EXPIREAT", new ExpireAtCommand());
         register("PEXPIREAT", new PexpireAtCommand());
         register("PERSIST", new PersistCommand());
+        register("RANDOMKEY", new RandomKeyCommand());
         
         // Server / Config
         register("CONFIG", new ConfigGetCommand());
