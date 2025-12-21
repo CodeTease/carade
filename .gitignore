@@ -29,6 +29,7 @@ replay_pid*
 venv
 __pycache__
 target
+.vscode
 
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 

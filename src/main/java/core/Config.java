@@ -1,23 +1,32 @@
 package core;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.io.*;
 import java.util.*;
 
 public class Config {
-    public static final int PORT = 63790; // Backward compat for ConfigGet
-    public static final String MAXMEMORY = "0"; // Backward compat for ConfigGet
+    // Backward compat for ConfigGet
+    public static final int PORT = 63790; 
+    public static final String MAXMEMORY = "0"; 
 
     public int port = 63790;
     public String password = "teasertopsecret";
     public long maxMemory = 0; // 0 = unlimited
-    public String maxMemoryPolicy = "noeviction"; // allkeys-lru, volatile-lru, allkeys-random, volatile-random, noeviction
+    public String maxMemoryPolicy = "noeviction"; 
     public Map<String, User> users = new HashMap<>();
+
+    public Config() {
+        // Default constructor for Jackson
+    }
 
     public static class User {
         public String name;
-        public String password; // Plain text for simplicity, or hash?
+        public String password;
         public boolean isAdmin;
         public boolean canWrite;
+
+        public User() { }
 
         public User(String name, String password, boolean isAdmin, boolean canWrite) {
             this.name = name;
@@ -28,13 +37,43 @@ public class Config {
     }
 
     public static Config load(String filename) {
+        // Try loading from YAML
+        File f = new File(filename);
+        if (!f.exists()) {
+            // Try looking for .yaml extension if .conf was passed
+            if (filename.endsWith(".conf")) {
+                File yamlFile = new File(filename.replace(".conf", ".yaml"));
+                if (yamlFile.exists()) f = yamlFile;
+            }
+        }
+
         Config config = new Config();
         // Default user
         config.users.put("default", new User("default", config.password, true, true));
-        
-        File f = new File(filename);
-        if (!f.exists()) return config;
 
+        if (!f.exists()) {
+             System.out.println("⚠️ Config file not found: " + filename + ". Using defaults.");
+             return config;
+        }
+
+        try {
+            ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+            config = mapper.readValue(f, Config.class);
+            
+            if (config.users == null) config.users = new HashMap<>();
+            
+            if (!config.users.containsKey("default")) {
+                 config.users.put("default", new User("default", config.password, true, true));
+            }
+            
+        } catch (Exception e) {
+            System.out.println("⚠️ Failed to load config as YAML (" + e.getMessage() + "). Attempting legacy parse...");
+            return loadLegacy(f, config);
+        }
+        return config;
+    }
+    
+    private static Config loadLegacy(File f, Config config) {
         try (BufferedReader br = new BufferedReader(new FileReader(f))) {
             String line;
             while ((line = br.readLine()) != null) {
@@ -55,7 +94,6 @@ public class Config {
                     case "maxmemory": config.maxMemory = parseMemory(val); break;
                     case "maxmemory-policy": config.maxMemoryPolicy = val; break;
                     case "user":
-                        // format: user <name> <password> <admin|readwrite|readonly>
                         String[] uParts = val.split("\\s+");
                         if (uParts.length >= 2) {
                             String name = uParts[0];
@@ -68,12 +106,13 @@ public class Config {
                         break;
                 }
             }
+            System.out.println("✅ Loaded legacy config.");
         } catch (Exception e) {
-            System.err.println("⚠️ Error loading config: " + e.getMessage());
+            System.err.println("⚠️ Error loading legacy config: " + e.getMessage());
         }
         return config;
     }
-    
+
     private static long parseMemory(String val) {
         val = val.toUpperCase();
         long factor = 1;

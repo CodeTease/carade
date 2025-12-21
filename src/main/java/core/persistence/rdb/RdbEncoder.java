@@ -4,6 +4,8 @@ import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.structs.CaradeZSet;
+import net.jpountz.lz4.LZ4Compressor;
+import net.jpountz.lz4.LZ4Factory;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -130,6 +132,26 @@ public class RdbEncoder {
     }
     
     private void writeString(DataOutputStream dos, byte[] bytes) throws IOException {
+        // Use LZ4 compression if data is large enough
+        if (bytes.length > 20) {
+            try {
+                LZ4Factory factory = LZ4Factory.fastestInstance();
+                LZ4Compressor compressor = factory.fastCompressor();
+                byte[] compressed = compressor.compress(bytes);
+                
+                if (compressed.length < bytes.length) {
+                    // Write Header: ENCVAL | LZ4
+                    dos.write((RdbConstants.RDB_ENCVAL << 6) | RdbConstants.RDB_ENC_LZ4);
+                    writeLen(dos, compressed.length);
+                    writeLen(dos, bytes.length);
+                    dos.write(compressed);
+                    return;
+                }
+            } catch (Exception e) {
+                // Fallback to raw
+            }
+        }
+
         writeLen(dos, bytes.length);
         dos.write(bytes);
     }

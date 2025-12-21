@@ -39,7 +39,8 @@ public class RdbConstants {
     public static final int RDB_ENC_INT8 = 0;
     public static final int RDB_ENC_INT16 = 1;
     public static final int RDB_ENC_INT32 = 2;
-    public static final int RDB_ENC_LZF = 3;
+    public static final int RDB_ENC_LZF = 3; // Deprecated but kept for read compatibility
+    public static final int RDB_ENC_LZ4 = 4; // New LZ4 encoding
     
     // Limits
     public static final int RDB_LOAD_NONE = 0;

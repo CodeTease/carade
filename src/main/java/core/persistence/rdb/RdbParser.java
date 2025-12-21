@@ -4,6 +4,8 @@ import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.structs.CaradeZSet;
+import net.jpountz.lz4.LZ4Factory;
+import net.jpountz.lz4.LZ4SafeDecompressor;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -69,11 +71,21 @@ public class RdbParser {
                 case RdbConstants.RDB_ENC_INT32:
                     return String.valueOf(in.readInt()).getBytes(StandardCharsets.UTF_8);
                 case RdbConstants.RDB_ENC_LZF:
+                    long lzfClen = loadLen();
+                    long lzfUlen = loadLen();
+                    byte[] lzfC = readBytes((int)lzfClen);
+                    byte[] lzfU = new byte[(int)lzfUlen];
+                    LZF.expand(lzfC, (int)lzfClen, lzfU, (int)lzfUlen);
+                    return lzfU;
+                case RdbConstants.RDB_ENC_LZ4:
                     long clen = loadLen();
                     long ulen = loadLen();
                     byte[] c = readBytes((int)clen);
                     byte[] u = new byte[(int)ulen];
-                    LZF.expand(c, (int)clen, u, (int)ulen);
+                    
+                    LZ4Factory factory = LZ4Factory.fastestInstance();
+                    LZ4SafeDecompressor decompressor = factory.safeDecompressor();
+                    decompressor.decompress(c, u);
                     return u;
                 default:
                     throw new IOException("Unknown string encoding: " + len);
