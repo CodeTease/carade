@@ -19,24 +19,36 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven' 
+          cache: 'maven'
 
       - name: Build with Maven
         run: mvn -B package --file pom.xml
 
       - name: Start Carade Server
         run: |
-          java -jar target/carade-0.2.0-SNAPSHOT.jar > carade.log 2>&1 &
+          JAR_FILE=$(find target -name "carade-*.jar" | head -n 1)
+          echo "Found JAR: $JAR_FILE"
+          
+          java -jar "$JAR_FILE" > carade.log 2>&1 &
           echo $! > server.pid
           
       - name: Wait for Server to be ready
         run: |
           attempt=0
-          until nc -z localhost 63790 || [ $attempt -eq 10 ]; do
-            echo "Waiting for Carade to wake up..."
+          until nc -z localhost 63790 || [ $attempt -eq 15 ]; do
+            echo "Waiting for Carade to wake up... (Attempt $((attempt + 1))/15)"
             sleep 1
             attempt=$((attempt + 1))
           done
+          
+          if ! nc -z localhost 63790; then
+            echo "❌ Failed to connect to Carade!"
+            echo "=== SERVER LOGS (START) ==="
+            cat carade.log
+            echo "=== SERVER LOGS (END) ==="
+            exit 1
+          fi
+          echo "✅ Carade is up and running!"
 
       - name: Run PING Test (Python)
         env:
@@ -48,6 +60,7 @@ jobs:
 
           try:
               s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              s.settimeout(5) # Thêm timeout cho client python
               s.connect(('127.0.0.1', 63790))
               
               s.sendall(b'AUTH teasertopsecret\n')
@@ -71,11 +84,14 @@ jobs:
               s.close()
           "
 
-      - name: Show Server Logs on Failure
+      - name: Show Server Logs (Always run if failed)
         if: failure()
-        run: cat carade.log
+        run: |
+          echo "=== FINAL SERVER LOGS ==="
+          cat carade.log
 
       - name: Stop Server
+        if: always()
         run: |
           if [ -f server.pid ]; then
             kill $(cat server.pid)
