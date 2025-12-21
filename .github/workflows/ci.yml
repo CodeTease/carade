@@ -19,15 +19,14 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: 'maven' 
 
-      - name: Compile Carade
-        run: |
-          mkdir -p bin
-          javac -d bin core/*.java
+      - name: Build with Maven
+        run: mvn -B package --file pom.xml
 
       - name: Start Carade Server
         run: |
-          java -cp bin core.Carade > carade.log 2>&1 &
+          java -jar target/carade-0.2.0-SNAPSHOT.jar > carade.log 2>&1 &
           echo $! > server.pid
           
       - name: Wait for Server to be ready
