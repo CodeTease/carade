@@ -124,8 +124,10 @@ public class CaradeDatabase {
                     if (v == null || v.expireAt == -1) bestKey = null;
                 }
             } else {
-                long oldestTime = Long.MAX_VALUE;
+                long bestVal = Long.MAX_VALUE;
                 int samples = 0;
+                boolean isLfu = policy.contains("lfu");
+
                 while (it.hasNext() && samples < 5) {
                     String key = it.next();
                     ValueEntry v = db.get(key);
@@ -133,9 +135,12 @@ public class CaradeDatabase {
                         boolean eligible = true;
                         if (policy.contains("volatile") && v.expireAt == -1) eligible = false;
                         
-                        if (eligible && v.lastAccessed < oldestTime) {
-                            oldestTime = v.lastAccessed;
-                            bestKey = key;
+                        if (eligible) {
+                            long val = isLfu ? v.frequency : v.lastAccessed;
+                            if (val < bestVal) {
+                                bestVal = val;
+                                bestKey = key;
+                            }
                         }
                     }
                     samples++;

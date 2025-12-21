@@ -4,8 +4,11 @@ import core.commands.string.SetCommand;
 import core.commands.string.SetNxCommand;
 import core.commands.string.IncrByCommand;
 import core.commands.string.DecrByCommand;
+import core.commands.string.BitCountCommand;
+import core.commands.string.BitOpCommand;
 import core.commands.generic.*;
 import core.commands.server.ConfigGetCommand;
+import core.commands.server.SlowlogCommand;
 import core.commands.connection.*;
 import core.commands.geo.*;
 import core.commands.replication.*;
@@ -13,6 +16,7 @@ import core.commands.hash.*;
 import core.commands.list.*;
 import core.commands.set.*;
 import core.commands.zset.*;
+import core.commands.hll.*;
 import core.commands.string.StrLenCommand;
 import core.commands.string.GetSetCommand;
 import java.util.HashMap;
@@ -30,6 +34,8 @@ public class CommandRegistry {
         register("DECRBY", new DecrByCommand());
         register("GETSET", new GetSetCommand());
         register("STRLEN", new StrLenCommand());
+        register("BITCOUNT", new BitCountCommand());
+        register("BITOP", new BitOpCommand());
 
         // Hash
         register("HMGET", new HmgetCommand());
@@ -51,6 +57,10 @@ public class CommandRegistry {
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
         register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
         
+        // HLL
+        register("PFADD", new PfAddCommand());
+        register("PFCOUNT", new PfCountCommand());
+        
         // Time / Generic
         register("PEXPIRE", new PexpireCommand());
         register("PTTL", new PttlCommand());
@@ -61,6 +71,7 @@ public class CommandRegistry {
         
         // Server / Config
         register("CONFIG", new ConfigGetCommand());
+        register("SLOWLOG", new SlowlogCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());

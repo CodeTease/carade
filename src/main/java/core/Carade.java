@@ -56,6 +56,10 @@ public class Carade {
     public static final AtomicInteger activeConnections = new AtomicInteger(0);
     public static final AtomicLong keyspaceHits = new AtomicLong(0);
     public static final AtomicLong keyspaceMisses = new AtomicLong(0);
+    
+    // --- SLOWLOG ---
+    public static final ConcurrentLinkedDeque<String> slowLog = new ConcurrentLinkedDeque<>();
+    public static final int SLOWLOG_MAX_LEN = 128;
 
     // --- STORAGE ENGINE ---
     public static CaradeDatabase db;

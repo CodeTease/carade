@@ -11,6 +11,7 @@ public class ValueEntry implements Serializable {
     public DataType type;
     public long expireAt = -1;
     public long lastAccessed;
+    public int frequency = 0;
     
     public ValueEntry(Object value, DataType type, long expireAt) {
         this.value = value;
@@ -21,6 +22,9 @@ public class ValueEntry implements Serializable {
     
     public void touch() {
         this.lastAccessed = System.currentTimeMillis();
+        if (this.frequency < Integer.MAX_VALUE) {
+            this.frequency++;
+        }
     }
     
     public boolean isExpired() {

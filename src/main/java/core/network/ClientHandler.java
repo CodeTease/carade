@@ -221,7 +221,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                              "HSET", "HDEL", "SADD", "SREM", "FLUSHALL", "FLUSHDB",
                              "HINCRBY", "SISMEMBER", "SCARD", 
                              "RENAME", "ZREM", "SETBIT", "INCR", "DECR", "EXPIRE", 
-                             "MSET", "ZADD", "ZINCRBY", "RPOPLPUSH", "LTRIM").contains(cmd);
+                             "MSET", "ZADD", "ZINCRBY", "RPOPLPUSH", "LTRIM", "BITOP", "PFADD").contains(cmd);
     }
     
     private boolean isAdminCommand(String cmd) {
@@ -269,6 +269,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         if (parts.isEmpty()) return;
         Carade.totalCommands.incrementAndGet();
 
+        long startTime = System.nanoTime();
         String cmd = new String(parts.get(0), StandardCharsets.UTF_8).toUpperCase();
         
         // Simple heuristic for RESP vs Text (Netty Decoder sets this usually, but let's assume if we are here we are parsing RESP)
@@ -416,6 +417,20 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
 
         } catch (Exception e) { 
             sendError("ERR " + e.getMessage());
+        } finally {
+            long duration = System.nanoTime() - startTime;
+            if (duration > 10_000_000) { // 10ms
+                StringBuilder sb = new StringBuilder();
+                sb.append(System.currentTimeMillis()).append(" ");
+                sb.append(duration / 1000).append("us "); // microseconds
+                for (byte[] part : parts) {
+                    sb.append(new String(part, StandardCharsets.UTF_8)).append(" ");
+                }
+                Carade.slowLog.add(sb.toString().trim());
+                while (Carade.slowLog.size() > Carade.SLOWLOG_MAX_LEN) {
+                    Carade.slowLog.poll();
+                }
+            }
         }
     }
     
