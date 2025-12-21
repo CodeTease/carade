@@ -2,6 +2,8 @@ package core.commands;
 
 import core.commands.string.SetCommand;
 import core.commands.string.SetNxCommand;
+import core.commands.string.IncrByCommand;
+import core.commands.string.DecrByCommand;
 import core.commands.generic.*;
 import core.commands.server.ConfigGetCommand;
 import core.commands.connection.*;
@@ -19,6 +21,8 @@ public class CommandRegistry {
     static {
         register("SET", new SetCommand());
         register("SETNX", new SetNxCommand());
+        register("INCRBY", new IncrByCommand());
+        register("DECRBY", new DecrByCommand());
         register("HMGET", new HmgetCommand());
         
         // Time / Generic
