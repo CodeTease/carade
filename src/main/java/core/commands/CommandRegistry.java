@@ -50,6 +50,11 @@ public class CommandRegistry {
         register("HKEYS", new HKeysCommand());
         register("HVALS", new HValsCommand());
         register("HEXISTS", new HExistsCommand());
+        register("HGETALL", new HGetAllCommand());
+        register("HDEL", new HDelCommand());
+        register("HINCRBY", new HIncrByCommand());
+        register("HSETNX", new HSetNxCommand());
+        register("HINCRBYFLOAT", new HIncrByFloatCommand());
 
         // List
         register("LLEN", new LLenCommand());
@@ -59,10 +64,22 @@ public class CommandRegistry {
         // Set
         register("SPOP", new SPopCommand());
         register("SRANDMEMBER", new SRandMemberCommand());
+        register("SADD", new SAddCommand());
+        register("SMEMBERS", new SMembersCommand());
+        register("SREM", new SRemCommand());
+        register("SISMEMBER", new SIsMemberCommand());
+        register("SCARD", new SCardCommand());
+        register("SINTER", new SInterCommand());
+        register("SUNION", new SUnionCommand());
+        register("SDIFF", new SDiffCommand());
+        register("SINTERSTORE", new SInterStoreCommand());
+        register("SUNIONSTORE", new SUnionStoreCommand());
+        register("SDIFFSTORE", new SDiffStoreCommand());
 
         // ZSet
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
         register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
+        register("ZADD", new ZAddCommand());
         
         // JSON
         register("JSON.SET", new JsonSetCommand());

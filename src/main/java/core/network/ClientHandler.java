@@ -49,6 +49,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     private volatile boolean transactionDirty = false;
     private Set<String> watching = new HashSet<>();
     private List<List<byte[]>> transactionQueue = new ArrayList<>();
+    private OutputStream captureBuffer = null; // For capturing output during transactions
 
     // Compatibility shim for OutputStreams in PubSub/Commands
     // Since Netty is async and commands expect an OutputStream to write to immediately,
@@ -112,6 +113,25 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
 
     // New send method for Netty
     public synchronized void send(boolean isResp, Object data, String textData) {
+        if (captureBuffer != null) {
+            try {
+                if (isResp && data != null) {
+                    if (data instanceof byte[]) captureBuffer.write((byte[]) data);
+                    else if (data instanceof ByteBuf) {
+                         ByteBuf b = (ByteBuf) data;
+                         byte[] arr = new byte[b.readableBytes()];
+                         b.getBytes(b.readerIndex(), arr);
+                         captureBuffer.write(arr);
+                    }
+                } else if (!isResp && textData != null) {
+                    captureBuffer.write((textData + "\n").getBytes(StandardCharsets.UTF_8));
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+
         if (ctx == null) return;
         
         if (isResp) {
@@ -368,8 +388,13 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                             String header = "*" + transactionQueue.size() + "\r\n";
                             buffer.write(header.getBytes());
                             
-                            for (List<byte[]> queuedCmd : transactionQueue) {
-                                executeCommand(queuedCmd, buffer, isResp);
+                            this.captureBuffer = buffer;
+                            try {
+                                for (List<byte[]> queuedCmd : transactionQueue) {
+                                    executeCommand(queuedCmd, buffer, isResp);
+                                }
+                            } finally {
+                                this.captureBuffer = null;
                             }
                             // Write raw bytes to Netty context
                             // We wrap in Unpooled.wrappedBuffer
@@ -1313,372 +1338,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                 break;
 
             // --- HASHES ---
-            case "HGETALL":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: HGETALL key"), "(error) usage: HGETALL key");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null || entry.type != DataType.HASH) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
-                    else {
-                        ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) entry.getValue();
-                        List<byte[]> flat = new ArrayList<>();
-                        List<String> flatStr = new ArrayList<>();
-                        for (Map.Entry<String, String> e : map.entrySet()) {
-                            flat.add(e.getKey().getBytes(StandardCharsets.UTF_8));
-                            flat.add(e.getValue().getBytes(StandardCharsets.UTF_8));
-                            flatStr.add(e.getKey());
-                            flatStr.add(e.getValue());
-                        }
-                        if (isResp) send(out, true, Resp.array(flat), null);
-                        else {
-                            StringBuilder sb2 = new StringBuilder();
-                            for (int i = 0; i < flatStr.size(); i++) {
-                                    sb2.append((i+1) + ") \"" + flatStr.get(i) + "\"\n");
-                            }
-                            send(out, false, null, sb2.toString().trim());
-                        }
-                    }
-                }
-                break;
-            
-            case "HDEL":
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: HDEL key field"), "(error) usage: HDEL key field");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    final int[] ret = {0};
-                    
-                    executeWrite(() -> {
-                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                            if (v.type == DataType.HASH) {
-                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
-                                if (map.remove(field) != null) ret[0] = 1;
-                                if (map.isEmpty()) return null;
-                            }
-                            return v;
-                        });
-                        if (ret[0] == 1) {
-                            Carade.notifyWatchers(key);
-                        }
-                    }, "HDEL", key, field);
-
-                    send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                }
-                break;
-
-            case "HINCRBY":
-                if (parts.size() < 4) send(out, isResp, Resp.error("usage: HINCRBY key field increment"), "(error) usage: HINCRBY key field increment");
-                else {
-                    Carade.performEvictionIfNeeded();
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    final long[] ret = {0};
-                    try {
-                        long incr = Long.parseLong(new String(parts.get(3), StandardCharsets.UTF_8));
-                        String incrStr = new String(parts.get(3), StandardCharsets.UTF_8);
-                        
-                        executeWrite(() -> {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                if (v == null) {
-                                    ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
-                                    map.put(field, String.valueOf(incr));
-                                    ret[0] = incr;
-                                    return new ValueEntry(map, DataType.HASH, -1);
-                                } else if (v.type != DataType.HASH) {
-                                    throw new RuntimeException("WRONGTYPE");
-                                } else {
-                                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
-                                    map.compute(field, (f, val) -> {
-                                        long oldVal = 0;
-                                        if (val != null) {
-                                            try { oldVal = Long.parseLong(val); } catch (Exception e) { throw new RuntimeException("ERR hash value is not an integer"); }
-                                        }
-                                        long newVal = oldVal + incr;
-                                        ret[0] = newVal;
-                                        return String.valueOf(newVal);
-                                    });
-                                    v.touch();
-                                    return v;
-                                }
-                            });
-                            Carade.notifyWatchers(key);
-                        }, "HINCRBY", key, field, incrStr);
-                        
-                        send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                    } catch (NumberFormatException e) {
-                            send(out, isResp, Resp.error("ERR value is not an integer or out of range"), "(error) ERR value is not an integer or out of range");
-                    } catch (RuntimeException e) {
-                            String msg = e.getMessage();
-                            if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
-                                send(out, isResp, Resp.error(msg), "(error) " + msg);
-                            else throw e;
-                    }
-                }
-                break;
-
             // --- SETS ---
-            case "SADD":
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: SADD key member"), "(error) usage: SADD key member");
-                else {
-                    Carade.performEvictionIfNeeded();
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    final int[] ret = {0};
-                    try {
-                        executeWrite(() -> {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                if (v == null) {
-                                    Set<String> set = ConcurrentHashMap.newKeySet();
-                                    set.add(member);
-                                    ret[0] = 1;
-                                    return new ValueEntry(set, DataType.SET, -1);
-                                } else if (v.type != DataType.SET) {
-                                    throw new RuntimeException("WRONGTYPE");
-                                } else {
-                                    Set<String> set = (Set<String>) v.getValue();
-                                    if (set.add(member)) ret[0] = 1;
-                                    else ret[0] = 0;
-                                    v.touch();
-                                    return v;
-                                }
-                            });
-                            if (ret[0] == 1) Carade.notifyWatchers(key);
-                        }, "SADD", key, member);
-                        
-                        send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                    } catch (RuntimeException e) {
-                        send(out, isResp, Resp.error("WRONGTYPE"), "(error) WRONGTYPE");
-                    }
-                }
-                break;
-                
-            case "SMEMBERS":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: SMEMBERS key"), "(error) usage: SMEMBERS key");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
-                    else {
-                        Set<String> set = (Set<String>) entry.getValue();
-                        List<byte[]> list = new ArrayList<>();
-                        List<String> listStr = new ArrayList<>();
-                        for(String s : set) {
-                            list.add(s.getBytes(StandardCharsets.UTF_8));
-                            listStr.add(s);
-                        }
-                        if (isResp) send(out, true, Resp.array(list), null);
-                        else {
-                            StringBuilder sb = new StringBuilder();
-                            for (int i = 0; i < listStr.size(); i++) sb.append((i+1) + ") \"" + listStr.get(i) + "\"\n");
-                            send(out, false, null, sb.toString().trim());
-                        }
-                    }
-                }
-                break;
-
-            case "SREM":
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: SREM key member"), "(error) usage: SREM key member");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    final int[] ret = {0};
-                    
-                    executeWrite(() -> {
-                        Carade.db.getStore(dbIndex).computeIfPresent(key, (k, v) -> {
-                            if (v.type == DataType.SET) {
-                                Set<String> set = (Set<String>) v.getValue();
-                                if (set.remove(member)) ret[0] = 1;
-                                if (set.isEmpty()) return null;
-                            }
-                            return v;
-                        });
-                        if (ret[0] == 1) {
-                             Carade.notifyWatchers(key);
-                        }
-                    }, "SREM", key, member);
-
-                    send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                }
-                break;
-            
-            case "SISMEMBER":
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: SISMEMBER key member"), "(error) usage: SISMEMBER key member");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String member = new String(parts.get(2), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
-                    else {
-                        Set<String> set = (Set<String>) entry.getValue();
-                        send(out, isResp, Resp.integer(set.contains(member) ? 1 : 0), "(integer) " + (set.contains(member) ? 1 : 0));
-                    }
-                }
-                break;
-                
-            case "SCARD":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: SCARD key"), "(error) usage: SCARD key");
-                else {
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, key);
-                    if (entry == null || entry.type != DataType.SET) send(out, isResp, Resp.integer(0), "(integer) 0");
-                    else {
-                        Set<String> set = (Set<String>) entry.getValue();
-                        send(out, isResp, Resp.integer(set.size()), "(integer) " + set.size());
-                    }
-                }
-                break;
-                
-            case "SINTER":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: SINTER key [key ...]"), "(error) usage: SINTER key [key ...]");
-                else {
-                    String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, firstKey);
-                    if (entry == null || entry.type != DataType.SET) {
-                         send(out, isResp, Resp.array(Collections.emptyList()), "(empty list or set)");
-                    } else {
-                         Set<String> result = new HashSet<>((Set<String>) entry.getValue());
-                         for (int i = 2; i < parts.size(); i++) {
-                             ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                             if (e == null || e.type != DataType.SET) {
-                                 result.clear();
-                                 break;
-                             }
-                             result.retainAll((Set<String>) e.getValue());
-                         }
-                         
-                         if (isResp) {
-                             List<byte[]> resp = new ArrayList<>();
-                             for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
-                             send(out, true, Resp.array(resp), null);
-                         }
-                         else {
-                             StringBuilder sb = new StringBuilder();
-                             int i = 1;
-                             for (String s : result) sb.append(i++).append(") \"").append(s).append("\"\n");
-                             send(out, false, null, sb.toString().trim());
-                         }
-                    }
-                }
-                break;
-
-            case "SUNION":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: SUNION key [key ...]"), "(error) usage: SUNION key [key ...]");
-                else {
-                     Set<String> result = new HashSet<>();
-                     for (int i = 1; i < parts.size(); i++) {
-                         ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                         if (e != null && e.type == DataType.SET) {
-                             result.addAll((Set<String>) e.getValue());
-                         }
-                     }
-                     if (isResp) {
-                         List<byte[]> resp = new ArrayList<>();
-                         for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
-                         send(out, true, Resp.array(resp), null);
-                     }
-                     else {
-                         StringBuilder sb = new StringBuilder();
-                         int i = 1;
-                         for (String s : result) sb.append(i++).append(") \"").append(s).append("\"\n");
-                         send(out, false, null, sb.toString().trim());
-                     }
-                }
-                break;
-
-            case "SDIFF":
-                if (parts.size() < 2) send(out, isResp, Resp.error("usage: SDIFF key [key ...]"), "(error) usage: SDIFF key [key ...]");
-                else {
-                    String firstKey = new String(parts.get(1), StandardCharsets.UTF_8);
-                    ValueEntry entry = Carade.db.get(dbIndex, firstKey);
-                    Set<String> result = new HashSet<>();
-                    if (entry != null && entry.type == DataType.SET) {
-                        result.addAll((Set<String>) entry.getValue());
-                    }
-                    
-                    for (int i = 2; i < parts.size(); i++) {
-                         ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                         if (e != null && e.type == DataType.SET) {
-                             result.removeAll((Set<String>) e.getValue());
-                         }
-                    }
-                    
-                    if (isResp) {
-                         List<byte[]> resp = new ArrayList<>();
-                         for(String s : result) resp.add(s.getBytes(StandardCharsets.UTF_8));
-                         send(out, true, Resp.array(resp), null);
-                    }
-                    else {
-                         StringBuilder sb = new StringBuilder();
-                         int i = 1;
-                         for (String s : result) sb.append(i++).append(") \"").append(s).append("\"\n");
-                         send(out, false, null, sb.toString().trim());
-                     }
-                }
-                break;
-            
-            case "SINTERSTORE":
-            case "SUNIONSTORE":
-            case "SDIFFSTORE":
-                if (parts.size() < 3) {
-                     send(out, isResp, Resp.error("usage: " + cmd + " destination key [key ...]"), "(error) usage: " + cmd + " destination key [key ...]");
-                } else {
-                     String destination = new String(parts.get(1), StandardCharsets.UTF_8);
-                     final int[] sizeRef = {0};
-                     
-                     Object[] cmdArgs = new Object[parts.size()-1];
-                     for(int i=1; i<parts.size(); i++) cmdArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                     
-                     executeWrite(() -> {
-                         Set<String> res = new HashSet<>();
-                         if (cmd.equals("SINTERSTORE")) {
-                             String firstKey = new String(parts.get(2), StandardCharsets.UTF_8);
-                             ValueEntry entry = Carade.db.get(dbIndex, firstKey);
-                             if (entry != null && entry.type == DataType.SET) {
-                                  res.addAll((Set<String>) entry.getValue());
-                                  for (int i = 3; i < parts.size(); i++) {
-                                      ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                                      if (e == null || e.type != DataType.SET) {
-                                          res.clear();
-                                          break;
-                                      }
-                                      res.retainAll((Set<String>) e.getValue());
-                                  }
-                             }
-                         } else if (cmd.equals("SUNIONSTORE")) {
-                             for (int i = 2; i < parts.size(); i++) {
-                                 ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                                 if (e != null && e.type == DataType.SET) {
-                                     res.addAll((Set<String>) e.getValue());
-                                 }
-                             }
-                         } else if (cmd.equals("SDIFFSTORE")) {
-                            String firstKey = new String(parts.get(2), StandardCharsets.UTF_8);
-                            ValueEntry entry = Carade.db.get(dbIndex, firstKey);
-                            if (entry != null && entry.type == DataType.SET) {
-                                res.addAll((Set<String>) entry.getValue());
-                            }
-                            for (int i = 3; i < parts.size(); i++) {
-                                 ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
-                                 if (e != null && e.type == DataType.SET) {
-                                     res.removeAll((Set<String>) e.getValue());
-                                 }
-                            }
-                         }
-                         
-                         if (res.isEmpty()) {
-                             Carade.db.remove(dbIndex, destination);
-                         } else {
-                             Set<String> newSet = ConcurrentHashMap.newKeySet();
-                             newSet.addAll(res);
-                             Carade.db.put(dbIndex, destination, new ValueEntry(newSet, DataType.SET, -1));
-                         }
-                         sizeRef[0] = res.size();
-                         Carade.notifyWatchers(destination);
-                     }, cmd, cmdArgs);
-                     
-                     send(out, isResp, Resp.integer(sizeRef[0]), "(integer) " + sizeRef[0]);
-                }
-                break;
 
             case "ZUNIONSTORE":
             case "ZINTERSTORE":
@@ -1805,52 +1465,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                 break;
 
             // --- SORTED SETS ---
-            case "ZADD":
-                if (parts.size() < 4 || (parts.size() - 2) % 2 != 0) {
-                        send(out, isResp, Resp.error("usage: ZADD key score member [score member ...]"), "(error) usage: ZADD key score member ...");
-                } else {
-                        Carade.performEvictionIfNeeded();
-                        String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                        final int[] addedCount = {0};
-                        try {
-                            String[] args = new String[parts.size()-1];
-                            for(int i=1; i<parts.size(); i++) args[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
-                            
-                            executeWrite(() -> {
-                                Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                    CaradeZSet zset;
-                                    if (v == null) {
-                                        zset = new CaradeZSet();
-                                        v = new ValueEntry(zset, DataType.ZSET, -1);
-                                    } else if (v.type != DataType.ZSET) {
-                                        throw new RuntimeException("WRONGTYPE");
-                                    } else {
-                                        zset = (CaradeZSet) v.getValue();
-                                    }
-                                    
-                                    for (int i = 2; i < parts.size(); i += 2) {
-                                        try {
-                                            double score = Double.parseDouble(new String(parts.get(i), StandardCharsets.UTF_8));
-                                            String member = new String(parts.get(i+1), StandardCharsets.UTF_8);
-                                            addedCount[0] += zset.add(score, member);
-                                        } catch (Exception ex) {}
-                                    }
-                                    v.touch();
-                                    return v;
-                                });
-                                Carade.notifyWatchers(key);
-                            }, "ZADD", (Object[]) args);
-                            
-                            send(out, isResp, Resp.integer(addedCount[0]), "(integer) " + addedCount[0]);
-                        } catch (RuntimeException e) {
-                            String msg = e.getMessage();
-                            if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
-                                send(out, isResp, Resp.error(msg), "(error) " + msg);
-                            else throw e;
-                        }
-                }
-                break;
-                
             case "ZRANGE":
                 if (parts.size() < 4) send(out, isResp, Resp.error("usage: ZRANGE key start stop [WITHSCORES]"), "(error) usage: ZRANGE key start stop [WITHSCORES]");
                 else {
@@ -2504,90 +2118,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                 }
                 break;
 
-            case "HSETNX":
-                if (parts.size() < 4) send(out, isResp, Resp.error("usage: HSETNX key field value"), "(error) usage: HSETNX key field value");
-                else {
-                    Carade.performEvictionIfNeeded();
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    String val = new String(parts.get(3), StandardCharsets.UTF_8);
-                    final int[] ret = {0};
-                    
-                    executeWrite(() -> {
-                        Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                            if (v == null) {
-                                ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
-                                map.put(field, val);
-                                ret[0] = 1;
-                                return new ValueEntry(map, DataType.HASH, -1);
-                            } else if (v.type != DataType.HASH) {
-                                throw new RuntimeException("WRONGTYPE");
-                            } else {
-                                ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
-                                if (map.putIfAbsent(field, val) == null) {
-                                    ret[0] = 1;
-                                }
-                                v.touch();
-                                return v;
-                            }
-                        });
-                        if (ret[0] == 1) Carade.notifyWatchers(key);
-                    }, "HSETNX", key, field, val);
-                    
-                    send(out, isResp, Resp.integer(ret[0]), "(integer) " + ret[0]);
-                }
-                break;
-                
-            case "HINCRBYFLOAT":
-                if (parts.size() < 4) send(out, isResp, Resp.error("usage: HINCRBYFLOAT key field increment"), "(error) usage: HINCRBYFLOAT key field increment");
-                else {
-                    Carade.performEvictionIfNeeded();
-                    String key = new String(parts.get(1), StandardCharsets.UTF_8);
-                    String field = new String(parts.get(2), StandardCharsets.UTF_8);
-                    final double[] ret = {0.0};
-                    try {
-                        double incr = Double.parseDouble(new String(parts.get(3), StandardCharsets.UTF_8));
-                        String incrStr = new String(parts.get(3), StandardCharsets.UTF_8);
-                        
-                        executeWrite(() -> {
-                            Carade.db.getStore(dbIndex).compute(key, (k, v) -> {
-                                if (v == null) {
-                                    ConcurrentHashMap<String, String> map = new ConcurrentHashMap<>();
-                                    map.put(field, String.valueOf(incr));
-                                    ret[0] = incr;
-                                    return new ValueEntry(map, DataType.HASH, -1);
-                                } else if (v.type != DataType.HASH) {
-                                    throw new RuntimeException("WRONGTYPE");
-                                } else {
-                                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
-                                    map.compute(field, (f, val) -> {
-                                        double oldVal = 0;
-                                        if (val != null) {
-                                            try { oldVal = Double.parseDouble(val); } catch (Exception e) { throw new RuntimeException("ERR hash value is not a float"); }
-                                        }
-                                        double newVal = oldVal + incr;
-                                        ret[0] = newVal;
-                                        return String.valueOf(newVal);
-                                    });
-                                    v.touch();
-                                    return v;
-                                }
-                            });
-                            Carade.notifyWatchers(key);
-                        }, "HINCRBYFLOAT", key, field, incrStr);
-                        
-                        String s = formatDouble(ret[0]);
-                        send(out, isResp, Resp.bulkString(s.getBytes(StandardCharsets.UTF_8)), s);
-                    } catch (NumberFormatException e) {
-                            send(out, isResp, Resp.error("ERR value is not a float"), "(error) ERR value is not a float");
-                    } catch (RuntimeException e) {
-                            String msg = e.getMessage();
-                            if (msg.startsWith("ERR") || msg.startsWith("WRONGTYPE"))
-                                send(out, isResp, Resp.error(msg), "(error) " + msg);
-                            else throw e;
-                    }
-                }
-                break;
                 
             case "LMOVE":
                 if (parts.size() < 5) send(out, isResp, Resp.error("usage: LMOVE source destination LEFT|RIGHT LEFT|RIGHT"), "(error) usage: LMOVE source destination LEFT|RIGHT LEFT|RIGHT");
