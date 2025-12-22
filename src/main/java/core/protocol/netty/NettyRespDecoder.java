@@ -167,14 +167,14 @@ public class NettyRespDecoder extends ByteToMessageDecoder {
         }
     }
 
-    private int findEndOfLine(ByteBuf in) {
-        int n = in.writerIndex();
-        for (int i = in.readerIndex(); i < n; i++) {
-            byte b = in.getByte(i);
-            if (b == '\r' && i + 1 < n && in.getByte(i + 1) == '\n') {
-                return i;
-            }
+private int findEndOfLine(ByteBuf in) {
+    int n = in.writerIndex();
+    for (int i = in.readerIndex(); i < n; i++) {
+        byte b = in.getByte(i);
+        if (b == '\n') { // Accept any line that ends with \n
+            return (i > in.readerIndex() && in.getByte(i - 1) == '\r') ? i - 1 : i;
         }
-        return -1;
     }
+    return -1;
+}
 }
