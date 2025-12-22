@@ -1,14 +1,8 @@
 package core.commands;
 
-import core.commands.string.SetCommand;
-import core.commands.string.SetNxCommand;
-import core.commands.string.IncrByCommand;
-import core.commands.string.DecrByCommand;
-import core.commands.string.BitCountCommand;
-import core.commands.string.BitOpCommand;
+import core.commands.string.*;
 import core.commands.generic.*;
-import core.commands.server.ConfigGetCommand;
-import core.commands.server.SlowlogCommand;
+import core.commands.server.*;
 import core.commands.connection.*;
 import core.commands.geo.*;
 import core.commands.replication.*;
@@ -17,12 +11,11 @@ import core.commands.list.*;
 import core.commands.set.*;
 import core.commands.zset.*;
 import core.commands.hll.*;
-import core.commands.string.StrLenCommand;
-import core.commands.string.GetSetCommand;
-import core.commands.string.AppendCommand;
-import core.commands.string.GetRangeCommand;
-import core.commands.string.SetRangeCommand;
 import core.commands.json.*;
+import core.commands.bloom.*;
+import core.commands.pubsub.*;
+import core.commands.transaction.*;
+
 import java.util.HashMap;
 import java.util.Map;
 import core.network.ClientHandler;
@@ -32,14 +25,21 @@ public class CommandRegistry {
     private static final Map<String, Command> commands = new HashMap<>();
 
     static {
+        // String
         register("SET", new SetCommand());
         register("SETNX", new SetNxCommand());
+        register("INCR", new IncrCommand());
+        register("DECR", new DecrCommand());
         register("INCRBY", new IncrByCommand());
         register("DECRBY", new DecrByCommand());
         register("GETSET", new GetSetCommand());
         register("STRLEN", new StrLenCommand());
         register("BITCOUNT", new BitCountCommand());
         register("BITOP", new BitOpCommand());
+        register("SETBIT", new SetBitCommand());
+        register("GETBIT", new GetBitCommand());
+        register("MSET", new MSetCommand());
+        register("MGET", new MGetCommand());
         register("APPEND", new AppendCommand());
         register("GETRANGE", new GetRangeCommand());
         register("SETRANGE", new SetRangeCommand());
@@ -60,6 +60,16 @@ public class CommandRegistry {
         register("LLEN", new LLenCommand());
         register("LINDEX", new LIndexCommand());
         register("LREM", new LRemCommand());
+        register("LPUSH", new LPushCommand());
+        register("RPUSH", new RPushCommand());
+        register("LTRIM", new LTrimCommand());
+        register("LRANGE", new LRangeCommand());
+        register("BLPOP", new BlPopCommand());
+        register("BRPOP", new BrPopCommand());
+        register("BRPOPLPUSH", new BrPopLPushCommand());
+        register("BLMOVE", new BlMoveCommand());
+        register("RPOPLPUSH", new RPopLPushCommand());
+        register("LMOVE", new LMoveCommand());
 
         // Set
         register("SPOP", new SPopCommand());
@@ -80,6 +90,24 @@ public class CommandRegistry {
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
         register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
         register("ZADD", new ZAddCommand());
+        register("ZRANGE", new ZRangeCommand());
+        register("ZREVRANGE", new ZRevRangeCommand());
+        register("ZRANK", new ZRankCommand());
+        register("ZREM", new ZRemCommand());
+        register("ZINCRBY", new ZIncrByCommand());
+        register("ZCARD", new ZCardCommand());
+        register("ZCOUNT", new ZCountCommand());
+        register("ZSCORE", new ZScoreCommand());
+        register("ZRANGEBYSCORE", new ZRangeByScoreCommand());
+        register("ZREVRANGEBYSCORE", new ZRangeByScoreCommand()); // Reuse same class
+        register("ZPOPMIN", new ZPopMinCommand());
+        register("ZPOPMAX", new ZPopMaxCommand());
+        register("ZUNIONSTORE", new ZUnionStoreCommand());
+        register("ZINTERSTORE", new ZInterStoreCommand());
+
+        // Bloom
+        register("BF.ADD", new BfAddCommand());
+        register("BF.EXISTS", new BfExistsCommand());
         
         // JSON
         register("JSON.SET", new JsonSetCommand());
@@ -97,10 +125,26 @@ public class CommandRegistry {
         register("PERSIST", new PersistCommand());
         register("RANDOMKEY", new RandomKeyCommand());
         register("SORT", new SortCommand());
-        
+        register("EXISTS", new ExistsCommand());
+        register("TYPE", new TypeCommand());
+        register("RENAME", new RenameCommand());
+        register("TTL", new TtlCommand());
+        register("EXPIRE", new ExpireCommand());
+        register("KEYS", new KeysCommand());
+        register("UNLINK", new UnlinkCommand());
+        register("SCAN", new ScanCommand());
+        register("HSCAN", new ScanCommand());
+        register("SSCAN", new ScanCommand());
+        register("ZSCAN", new ScanCommand());
+
         // Server / Config
         register("CONFIG", new ConfigGetCommand());
         register("SLOWLOG", new SlowlogCommand());
+        register("INFO", new InfoCommand());
+        register("DBSIZE", new DbSizeCommand());
+        register("FLUSHALL", new FlushAllCommand());
+        register("FLUSHDB", new FlushDbCommand());
+        register("BGREWRITEAOF", new BgRewriteAofCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());
@@ -109,6 +153,23 @@ public class CommandRegistry {
         
         // Connection
         register("SELECT", new SelectCommand());
+        register("PING", new PingCommand());
+        register("QUIT", new QuitCommand());
+        register("AUTH", new AuthCommand());
+
+        // PubSub
+        register("SUBSCRIBE", new SubscribeCommand());
+        register("UNSUBSCRIBE", new UnsubscribeCommand());
+        register("PSUBSCRIBE", new PSubscribeCommand());
+        register("PUNSUBSCRIBE", new PUnsubscribeCommand());
+        register("PUBLISH", new PublishCommand());
+
+        // Transactions
+        register("MULTI", new MultiCommand());
+        register("EXEC", new ExecCommand());
+        register("DISCARD", new DiscardCommand());
+        register("WATCH", new WatchCommand());
+        register("UNWATCH", new UnwatchCommand());
 
         // Replication
         register("REPLICAOF", new ReplicaOfCommand());
