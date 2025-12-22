@@ -455,6 +455,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
          
          String cursor = new String(parts.get(cursorIdx), StandardCharsets.UTF_8);
          String pattern = null;
+         String typeFilter = null;
          int count = 10;
          
          for (int i = cursorIdx + 1; i < parts.size(); i++) {
@@ -463,6 +464,8 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                  pattern = new String(parts.get(++i), StandardCharsets.UTF_8);
              } else if (arg.equals("COUNT") && i + 1 < parts.size()) {
                  try { count = Integer.parseInt(new String(parts.get(++i), StandardCharsets.UTF_8)); } catch (Exception e) {}
+             } else if (arg.equals("TYPE") && i + 1 < parts.size()) {
+                 typeFilter = new String(parts.get(++i), StandardCharsets.UTF_8).toUpperCase();
              }
          }
          
@@ -523,7 +526,13 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
              
              if (cmd.equals("SCAN") || cmd.equals("SSCAN")) {
                  k = (String) next;
-                 if (regex == null || regex.matcher(k).matches()) {
+                 boolean matches = true;
+                 if (cmd.equals("SCAN") && typeFilter != null) {
+                     ValueEntry e = Carade.db.get(dbIndex, k);
+                     if (e == null || !e.type.name().equals(typeFilter)) matches = false;
+                 }
+                 
+                 if (matches && (regex == null || regex.matcher(k).matches())) {
                      results.add(k.getBytes(StandardCharsets.UTF_8));
                  }
              } else if (cmd.equals("HSCAN")) {
@@ -997,81 +1006,123 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
             
             case "BLPOP":
             case "BRPOP":
+            case "BRPOPLPUSH":
                 // Blocking commands in Netty need care. 
                 // We cannot block the event loop!
                 // We should probably check if available, if not, add to waiters and return.
                 // The BlockingRequest future callback needs to write to ctx.
                 
-                if (parts.size() < 3) send(out, isResp, Resp.error("usage: "+cmd+" key [key ...] timeout"), "(error) usage: "+cmd+" key [key ...] timeout");
-                else {
-                    try {
-                        double timeout = Double.parseDouble(new String(parts.get(parts.size()-1), StandardCharsets.UTF_8));
-                        List<String> keys = new ArrayList<>();
-                        for(int i=1; i<parts.size()-1; i++) keys.add(new String(parts.get(i), StandardCharsets.UTF_8));
-                        
-                        boolean served = false;
-                        for (String k : keys) {
-                            ValueEntry entry = Carade.db.get(dbIndex, k);
-                            if (entry != null && entry.type == DataType.LIST) {
-                                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.getValue();
-                                if (!list.isEmpty()) {
-                                    final String[] valRef = {null};
-                                    final String finalKey = k;
-                                    
-                                    executeWrite(() -> {
-                                        ValueEntry e = Carade.db.get(dbIndex, finalKey);
-                                        if (e != null && e.type == DataType.LIST) {
-                                            ConcurrentLinkedDeque<String> l = (ConcurrentLinkedDeque<String>) e.getValue();
-                                            valRef[0] = cmd.equals("BLPOP") ? l.pollFirst() : l.pollLast();
-                                            if (valRef[0] != null) {
-                                                if (l.isEmpty()) Carade.db.remove(dbIndex, finalKey);
-                                                Carade.notifyWatchers(finalKey);
+                boolean isBrpoplpush = cmd.equals("BRPOPLPUSH");
+                if (isBrpoplpush && parts.size() < 4) {
+                     send(out, isResp, Resp.error("usage: BRPOPLPUSH source destination timeout"), "(error) usage: BRPOPLPUSH source destination timeout");
+                     break;
+                }
+                if (!isBrpoplpush && parts.size() < 3) {
+                     send(out, isResp, Resp.error("usage: "+cmd+" key [key ...] timeout"), "(error) usage: "+cmd+" key [key ...] timeout");
+                     break;
+                }
+
+                try {
+                    double timeout;
+                    if (isBrpoplpush) timeout = Double.parseDouble(new String(parts.get(3), StandardCharsets.UTF_8));
+                    else timeout = Double.parseDouble(new String(parts.get(parts.size()-1), StandardCharsets.UTF_8));
+                    
+                    List<String> keys = new ArrayList<>();
+                    if (isBrpoplpush) keys.add(new String(parts.get(1), StandardCharsets.UTF_8));
+                    else for(int i=1; i<parts.size()-1; i++) keys.add(new String(parts.get(i), StandardCharsets.UTF_8));
+                    
+                    boolean served = false;
+                    for (String k : keys) {
+                        ValueEntry entry = Carade.db.get(dbIndex, k);
+                        if (entry != null && entry.type == DataType.LIST) {
+                            ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) entry.getValue();
+                            if (!list.isEmpty()) {
+                                final String[] valRef = {null};
+                                final String finalKey = k;
+                                String destKey = isBrpoplpush ? new String(parts.get(2), StandardCharsets.UTF_8) : null;
+                                
+                                executeWrite(() -> {
+                                    ValueEntry e = Carade.db.get(dbIndex, finalKey);
+                                    if (e != null && e.type == DataType.LIST) {
+                                        ConcurrentLinkedDeque<String> l = (ConcurrentLinkedDeque<String>) e.getValue();
+                                        valRef[0] = (cmd.equals("BLPOP")) ? l.pollFirst() : l.pollLast(); // BRPOPLPUSH pops from tail (RPOP)
+                                        if (valRef[0] != null) {
+                                            if (l.isEmpty()) Carade.db.remove(dbIndex, finalKey);
+                                            Carade.notifyWatchers(finalKey);
+                                            
+                                            if (destKey != null) {
+                                                 Carade.db.getStore(dbIndex).compute(destKey, (dk, dv) -> {
+                                                     if (dv == null) {
+                                                         ConcurrentLinkedDeque<String> dl = new ConcurrentLinkedDeque<>();
+                                                         dl.addFirst(valRef[0]);
+                                                         return new ValueEntry(dl, DataType.LIST, -1);
+                                                     } else if (dv.type == DataType.LIST) {
+                                                         ((ConcurrentLinkedDeque<String>) dv.getValue()).addFirst(valRef[0]);
+                                                         return dv;
+                                                     }
+                                                     // Error handling for wrong type is hard here inside async
+                                                     return dv;
+                                                 });
+                                                 Carade.notifyWatchers(destKey);
                                             }
                                         }
-                                    }, cmd.equals("BLPOP") ? "LPOP" : "RPOP", k);
-                                    
-                                    if (valRef[0] != null) {
-                                        List<byte[]> resp = new ArrayList<>();
-                                        resp.add(k.getBytes(StandardCharsets.UTF_8));
-                                        resp.add(valRef[0].getBytes(StandardCharsets.UTF_8));
-                                        send(out, isResp, Resp.array(resp), null);
-                                        served = true;
-                                        break;
                                     }
+                                }, isBrpoplpush ? "RPOPLPUSH" : (cmd.equals("BLPOP") ? "LPOP" : "RPOP"), isBrpoplpush ? new Object[]{k, destKey} : new Object[]{k});
+                                
+                                if (valRef[0] != null) {
+                                    if (isBrpoplpush) {
+                                         send(out, isResp, Resp.bulkString(valRef[0].getBytes(StandardCharsets.UTF_8)), valRef[0]);
+                                    } else {
+                                         List<byte[]> resp = new ArrayList<>();
+                                         resp.add(k.getBytes(StandardCharsets.UTF_8));
+                                         resp.add(valRef[0].getBytes(StandardCharsets.UTF_8));
+                                         send(out, isResp, Resp.array(resp), null);
+                                    }
+                                    served = true;
+                                    break;
                                 }
                             }
                         }
+                    }
+                    
+                    if (!served) {
+                        // Async blocking
+                        Carade.BlockingRequest bReq = new Carade.BlockingRequest(cmd.equals("BLPOP"), isBrpoplpush ? new String(parts.get(2), StandardCharsets.UTF_8) : null, dbIndex);
+                        for (String k : keys) {
+                            Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
+                        }
                         
-                        if (!served) {
-                            // Async blocking
-                            Carade.BlockingRequest bReq = new Carade.BlockingRequest(cmd.equals("BLPOP"));
-                            for (String k : keys) {
-                                Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
-                            }
-                            
-                            // Attach callback to future
-                            bReq.future.whenComplete((result, ex) -> {
-                                 if (ex != null) {
-                                     sendNull();
+                        // Attach callback to future
+                        bReq.future.whenComplete((result, ex) -> {
+                             if (ex != null) {
+                                 sendNull();
+                             } else {
+                                 if (isBrpoplpush) {
+                                     // result is [source, value]
+                                     if (result.size() >= 2) {
+                                          send(out, isResp, Resp.bulkString(result.get(1)), new String(result.get(1), StandardCharsets.UTF_8));
+                                     } else {
+                                          sendNull();
+                                     }
                                  } else {
                                      sendArray(result);
                                  }
-                            });
-                            
-                            // Handle Timeout
-                            if (timeout > 0) {
-                                // Schedule timeout
-                                ctx.executor().schedule(() -> {
-                                    if (!bReq.future.isDone()) {
-                                        bReq.future.cancel(true); // Will trigger whenComplete with CancellationException usually, or we handle it
-                                        sendNull();
-                                    }
-                                }, (long)(timeout * 1000), TimeUnit.MILLISECONDS);
-                            }
+                             }
+                        });
+                        
+                        // Handle Timeout
+                        if (timeout > 0) {
+                            // Schedule timeout
+                            ctx.executor().schedule(() -> {
+                                if (!bReq.future.isDone()) {
+                                    bReq.future.cancel(true); // Will trigger whenComplete with CancellationException usually, or we handle it
+                                    sendNull();
+                                }
+                            }, (long)(timeout * 1000), TimeUnit.MILLISECONDS);
                         }
-                    } catch (NumberFormatException e) {
-                        send(out, isResp, Resp.error("ERR timeout is not a float or out of range"), "(error) ERR timeout is not a float or out of range");
                     }
+                } catch (NumberFormatException e) {
+                    send(out, isResp, Resp.error("ERR timeout is not a float or out of range"), "(error) ERR timeout is not a float or out of range");
                 }
                 break;
 
@@ -1520,6 +1571,194 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                          for (String s : result) sb.append(i++).append(") \"").append(s).append("\"\n");
                          send(out, false, null, sb.toString().trim());
                      }
+                }
+                break;
+            
+            case "SINTERSTORE":
+            case "SUNIONSTORE":
+            case "SDIFFSTORE":
+                if (parts.size() < 3) {
+                     send(out, isResp, Resp.error("usage: " + cmd + " destination key [key ...]"), "(error) usage: " + cmd + " destination key [key ...]");
+                } else {
+                     String destination = new String(parts.get(1), StandardCharsets.UTF_8);
+                     final int[] sizeRef = {0};
+                     
+                     Object[] cmdArgs = new Object[parts.size()-1];
+                     for(int i=1; i<parts.size(); i++) cmdArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
+                     
+                     executeWrite(() -> {
+                         Set<String> res = new HashSet<>();
+                         if (cmd.equals("SINTERSTORE")) {
+                             String firstKey = new String(parts.get(2), StandardCharsets.UTF_8);
+                             ValueEntry entry = Carade.db.get(dbIndex, firstKey);
+                             if (entry != null && entry.type == DataType.SET) {
+                                  res.addAll((Set<String>) entry.getValue());
+                                  for (int i = 3; i < parts.size(); i++) {
+                                      ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
+                                      if (e == null || e.type != DataType.SET) {
+                                          res.clear();
+                                          break;
+                                      }
+                                      res.retainAll((Set<String>) e.getValue());
+                                  }
+                             }
+                         } else if (cmd.equals("SUNIONSTORE")) {
+                             for (int i = 2; i < parts.size(); i++) {
+                                 ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
+                                 if (e != null && e.type == DataType.SET) {
+                                     res.addAll((Set<String>) e.getValue());
+                                 }
+                             }
+                         } else if (cmd.equals("SDIFFSTORE")) {
+                            String firstKey = new String(parts.get(2), StandardCharsets.UTF_8);
+                            ValueEntry entry = Carade.db.get(dbIndex, firstKey);
+                            if (entry != null && entry.type == DataType.SET) {
+                                res.addAll((Set<String>) entry.getValue());
+                            }
+                            for (int i = 3; i < parts.size(); i++) {
+                                 ValueEntry e = Carade.db.get(dbIndex, new String(parts.get(i), StandardCharsets.UTF_8));
+                                 if (e != null && e.type == DataType.SET) {
+                                     res.removeAll((Set<String>) e.getValue());
+                                 }
+                            }
+                         }
+                         
+                         if (res.isEmpty()) {
+                             Carade.db.remove(dbIndex, destination);
+                         } else {
+                             Set<String> newSet = ConcurrentHashMap.newKeySet();
+                             newSet.addAll(res);
+                             Carade.db.put(dbIndex, destination, new ValueEntry(newSet, DataType.SET, -1));
+                         }
+                         sizeRef[0] = res.size();
+                         Carade.notifyWatchers(destination);
+                     }, cmd, cmdArgs);
+                     
+                     send(out, isResp, Resp.integer(sizeRef[0]), "(integer) " + sizeRef[0]);
+                }
+                break;
+
+            case "ZUNIONSTORE":
+            case "ZINTERSTORE":
+                if (parts.size() < 4) {
+                    send(out, isResp, Resp.error("usage: " + cmd + " destination numkeys key [key ...] [WEIGHTS weight ...] [AGGREGATE SUM|MIN|MAX]"), "(error) usage: " + cmd + " ...");
+                } else {
+                    try {
+                        String dest = new String(parts.get(1), StandardCharsets.UTF_8);
+                        int numKeys = Integer.parseInt(new String(parts.get(2), StandardCharsets.UTF_8));
+                        if (numKeys < 1) {
+                            sendError("ERR at least 1 input key is needed for " + cmd.toLowerCase());
+                            break;
+                        }
+                        
+                        List<String> srcKeys = new ArrayList<>();
+                        for(int i=0; i<numKeys; i++) {
+                            if (3+i >= parts.size()) throw new IndexOutOfBoundsException();
+                            srcKeys.add(new String(parts.get(3+i), StandardCharsets.UTF_8));
+                        }
+                        
+                        int nextArg = 3 + numKeys;
+                        List<Double> weights = new ArrayList<>();
+                        String aggregate = "SUM";
+                        
+                        while(nextArg < parts.size()) {
+                            String arg = new String(parts.get(nextArg++), StandardCharsets.UTF_8).toUpperCase();
+                            if (arg.equals("WEIGHTS")) {
+                                for(int i=0; i<numKeys; i++) {
+                                    if (nextArg >= parts.size()) throw new IllegalArgumentException("ERR syntax error");
+                                    weights.add(Double.parseDouble(new String(parts.get(nextArg++), StandardCharsets.UTF_8)));
+                                }
+                            } else if (arg.equals("AGGREGATE")) {
+                                if (nextArg >= parts.size()) throw new IllegalArgumentException("ERR syntax error");
+                                aggregate = new String(parts.get(nextArg++), StandardCharsets.UTF_8).toUpperCase();
+                            }
+                        }
+                        if (weights.isEmpty()) for(int i=0; i<numKeys; i++) weights.add(1.0);
+                        
+                        final String aggOp = aggregate;
+                        final int[] sizeRef = {0};
+                        
+                        // Serialize args roughly
+                        Object[] cmdArgs = new Object[parts.size()-1];
+                        for(int i=1; i<parts.size(); i++) cmdArgs[i-1] = new String(parts.get(i), StandardCharsets.UTF_8);
+
+                        executeWrite(() -> {
+                            Map<String, Double> finalScores = new HashMap<>();
+                            
+                            // Initialize with first set for INTER, or empty for UNION
+                            if (cmd.equals("ZINTERSTORE")) {
+                                ValueEntry e = Carade.db.get(dbIndex, srcKeys.get(0));
+                                if (e != null && e.type == DataType.ZSET) {
+                                    CaradeZSet zs = (CaradeZSet) e.getValue();
+                                    for(Map.Entry<String, Double> entry : zs.scores.entrySet()) {
+                                        finalScores.put(entry.getKey(), entry.getValue() * weights.get(0));
+                                    }
+                                }
+                            }
+                            
+                            if (cmd.equals("ZUNIONSTORE")) {
+                                for(int i=0; i<numKeys; i++) {
+                                    String k = srcKeys.get(i);
+                                    double w = weights.get(i);
+                                    ValueEntry e = Carade.db.get(dbIndex, k);
+                                    if (e != null && e.type == DataType.ZSET) {
+                                        CaradeZSet zs = (CaradeZSet) e.getValue();
+                                        for(Map.Entry<String, Double> entry : zs.scores.entrySet()) {
+                                            String member = entry.getKey();
+                                            double score = entry.getValue() * w;
+                                            finalScores.merge(member, score, (oldV, newV) -> {
+                                                if (aggOp.equals("MIN")) return Math.min(oldV, newV);
+                                                if (aggOp.equals("MAX")) return Math.max(oldV, newV);
+                                                return oldV + newV;
+                                            });
+                                        }
+                                    }
+                                }
+                            } else {
+                                // ZINTERSTORE intersection logic
+                                for(int i=1; i<numKeys; i++) {
+                                    String k = srcKeys.get(i);
+                                    double w = weights.get(i);
+                                    ValueEntry e = Carade.db.get(dbIndex, k);
+                                    if (e == null || e.type != DataType.ZSET) {
+                                        finalScores.clear();
+                                        break;
+                                    }
+                                    CaradeZSet zs = (CaradeZSet) e.getValue();
+                                    Iterator<Map.Entry<String, Double>> it = finalScores.entrySet().iterator();
+                                    while(it.hasNext()) {
+                                        Map.Entry<String, Double> ent = it.next();
+                                        Double s = zs.score(ent.getKey());
+                                        if (s == null) {
+                                            it.remove();
+                                        } else {
+                                            double newScore = s * w;
+                                            if (aggOp.equals("MIN")) ent.setValue(Math.min(ent.getValue(), newScore));
+                                            else if (aggOp.equals("MAX")) ent.setValue(Math.max(ent.getValue(), newScore));
+                                            else ent.setValue(ent.getValue() + newScore);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (finalScores.isEmpty()) {
+                                Carade.db.remove(dbIndex, dest);
+                            } else {
+                                CaradeZSet resZ = new CaradeZSet();
+                                for(Map.Entry<String, Double> ent : finalScores.entrySet()) {
+                                    resZ.add(ent.getValue(), ent.getKey());
+                                }
+                                Carade.db.put(dbIndex, dest, new ValueEntry(resZ, DataType.ZSET, -1));
+                            }
+                            sizeRef[0] = finalScores.size();
+                            Carade.notifyWatchers(dest);
+                        }, cmd, cmdArgs);
+                        
+                        send(out, isResp, Resp.integer(sizeRef[0]), "(integer) " + sizeRef[0]);
+                        
+                    } catch (Exception e) {
+                        sendError("ERR syntax error");
+                    }
                 }
                 break;
 

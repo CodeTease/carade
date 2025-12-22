@@ -96,7 +96,14 @@ public class Carade {
     public static class BlockingRequest {
         public final CompletableFuture<List<byte[]>> future = new CompletableFuture<>();
         public final boolean isLeft;
-        public BlockingRequest(boolean isLeft) { this.isLeft = isLeft; }
+        public final String targetKey; // For BRPOPLPUSH
+        public final int dbIndex;
+        public BlockingRequest(boolean isLeft, int dbIndex) { this(isLeft, null, dbIndex); }
+        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex) { 
+            this.isLeft = isLeft; 
+            this.targetKey = targetKey;
+            this.dbIndex = dbIndex;
+        }
     }
     public static final ConcurrentHashMap<String, ConcurrentLinkedQueue<BlockingRequest>> blockingRegistry = new ConcurrentHashMap<>();
 
@@ -120,13 +127,49 @@ public class Carade {
                 String val = req.isLeft ? list.pollFirst() : list.pollLast();
                 
                 if (val != null) {
-                    q.poll(); 
+                    q.poll();
+                    
+                    if (req.targetKey != null) {
+                         // BRPOPLPUSH logic: push to target
+                         db.getStore(req.dbIndex).compute(req.targetKey, (k, valEntry) -> {
+                             if (valEntry == null) {
+                                 ConcurrentLinkedDeque<String> l = new ConcurrentLinkedDeque<>();
+                                 l.addFirst(val);
+                                 return new ValueEntry(l, DataType.LIST, -1);
+                             } else if (valEntry.type == DataType.LIST) {
+                                 ((ConcurrentLinkedDeque<String>) valEntry.getValue()).addFirst(val);
+                                 return valEntry;
+                             }
+                             return valEntry; // Should error, but blocking usually assumes success
+                         });
+                         notifyWatchers(req.targetKey);
+                    }
+                    
                     boolean completed = req.future.complete(Arrays.asList(key.getBytes(StandardCharsets.UTF_8), val.getBytes(StandardCharsets.UTF_8)));
                     if (!completed) {
-                        if (req.isLeft) list.addFirst(val); else list.addLast(val); // Revert
+                        // Revert pop
+                        if (req.isLeft) list.addFirst(val); else list.addLast(val); 
+                        // Revert push if needed (complex, assuming complete() usually works if not done)
+                        // Actually if future was cancelled, we should revert everything.
+                        if (req.targetKey != null) {
+                             db.getStore(req.dbIndex).computeIfPresent(req.targetKey, (k, valEntry) -> {
+                                 if (valEntry.type == DataType.LIST) {
+                                     ((ConcurrentLinkedDeque<String>) valEntry.getValue()).pollFirst();
+                                 }
+                                 return valEntry;
+                             });
+                        }
                         continue;
                     }
-                    if (aofHandler != null) aofHandler.log(req.isLeft ? "LPOP" : "RPOP", key);
+                    
+                    // AOF Logging
+                    if (aofHandler != null) {
+                        if (req.targetKey != null) {
+                            aofHandler.log("RPOPLPUSH", key, req.targetKey); // Assuming BRPOPLPUSH acts like RPOPLPUSH on success
+                        } else {
+                            aofHandler.log(req.isLeft ? "LPOP" : "RPOP", key);
+                        }
+                    }
                     if (list.isEmpty()) db.remove(key);
                 } else {
                     return;

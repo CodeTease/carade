@@ -19,6 +19,9 @@ import core.commands.zset.*;
 import core.commands.hll.*;
 import core.commands.string.StrLenCommand;
 import core.commands.string.GetSetCommand;
+import core.commands.string.AppendCommand;
+import core.commands.string.GetRangeCommand;
+import core.commands.string.SetRangeCommand;
 import core.commands.json.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -37,6 +40,9 @@ public class CommandRegistry {
         register("STRLEN", new StrLenCommand());
         register("BITCOUNT", new BitCountCommand());
         register("BITOP", new BitOpCommand());
+        register("APPEND", new AppendCommand());
+        register("GETRANGE", new GetRangeCommand());
+        register("SETRANGE", new SetRangeCommand());
 
         // Hash
         register("HMGET", new HmgetCommand());
@@ -73,6 +79,7 @@ public class CommandRegistry {
         register("PEXPIREAT", new PexpireAtCommand());
         register("PERSIST", new PersistCommand());
         register("RANDOMKEY", new RandomKeyCommand());
+        register("SORT", new SortCommand());
         
         // Server / Config
         register("CONFIG", new ConfigGetCommand());
