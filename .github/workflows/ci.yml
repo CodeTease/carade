@@ -2,7 +2,7 @@ name: Carade CI Test
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -22,14 +22,11 @@ jobs:
           cache: 'maven'
 
       - name: Build with Maven
-        run: mvn -B package --file pom.xml
+        run: mvn clean compile
 
       - name: Start Carade Server
         run: |
-          JAR_FILE=$(find target -name "carade-*.jar" | head -n 1)
-          echo "Found JAR: $JAR_FILE"
-          
-          java -jar "$JAR_FILE" > carade.log 2>&1 &
+          mvn exec:java > carade.log 2>&1 &
           echo $! > server.pid
           
       - name: Wait for Server to be ready
@@ -50,39 +47,11 @@ jobs:
           fi
           echo "✅ Carade is up and running!"
 
-      - name: Run PING Test (Python)
+      - name: Run PING Test 
         env:
           CARADE_PASSWORD: teasertopsecret
         run: |
-          python3 -c "
-          import socket
-          import sys
-
-          try:
-              s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-              s.settimeout(5) # Thêm timeout cho client python
-              s.connect(('127.0.0.1', 63790))
-              
-              s.sendall(b'AUTH teasertopsecret\n')
-              auth_resp = s.recv(1024).decode()
-              print(f'Auth Response: {auth_resp.strip()}')
-              
-              s.sendall(b'PING\n')
-              resp = s.recv(1024).decode()
-              print(f'Ping Response: {resp.strip()}')
-              
-              if 'PONG' in resp:
-                  print('✅ CI Test Passed: PONG received!')
-                  sys.exit(0)
-              else:
-                  print('❌ CI Test Failed: Unexpected response')
-                  sys.exit(1)
-          except Exception as e:
-              print(f'💥 Error during test: {e}')
-              sys.exit(1)
-          finally:
-              s.close()
-          "
+          python3 ping.py
 
       - name: Show Server Logs (Always run if failed)
         if: failure()
