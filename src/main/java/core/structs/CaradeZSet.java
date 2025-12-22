@@ -69,4 +69,26 @@ public class CaradeZSet implements Serializable {
         add(newScore, member);
         return newScore;
     }
+
+    public java.util.List<ZNode> popMin(int count) {
+        java.util.List<ZNode> result = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            ZNode node = sorted.pollFirst();
+            if (node == null) break;
+            scores.remove(node.member);
+            result.add(node);
+        }
+        return result;
+    }
+
+    public java.util.List<ZNode> popMax(int count) {
+        java.util.List<ZNode> result = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            ZNode node = sorted.pollLast();
+            if (node == null) break;
+            scores.remove(node.member);
+            result.add(node);
+        }
+        return result;
+    }
 }
