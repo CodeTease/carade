@@ -83,6 +83,9 @@ public class Carade {
     // --- WATCH / TRANSACTIONS ---
     public static final ConcurrentHashMap<String, Set<ClientHandler>> watchers = new ConcurrentHashMap<>();
 
+    // --- MONITOR ---
+    public static final Set<ClientHandler> monitors = ConcurrentHashMap.newKeySet();
+
     public static void notifyWatchers(String key) {
         Set<ClientHandler> interested = watchers.get(key);
         if (interested != null) {
@@ -207,6 +210,7 @@ public class Carade {
         CommandRegistry.register("RPOP", new RPopCommand());
         CommandRegistry.register("HSET", new HSetCommand());
         CommandRegistry.register("HGET", new HGetCommand());
+        CommandRegistry.register("MONITOR", new core.commands.server.MonitorCommand());
 
         // Load Config
         config = Config.load("carade.conf");

@@ -42,6 +42,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     }
     
     public boolean isSubscribed = false; // Accessible by Carade (hacky)
+    private boolean isMonitor = false;
     private boolean currentIsResp = true; // Netty decoder implies RESP mode, but we might support legacy text
     
     // Transaction State
@@ -109,8 +110,17 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     private void cleanup() {
         Carade.pubSub.unsubscribeAll(this);
         core.replication.ReplicationManager.getInstance().removeReplica(this);
+        Carade.monitors.remove(this);
         unwatchAll();
         Carade.activeConnections.decrementAndGet();
+    }
+
+    public void setMonitor(boolean isMonitor) {
+        this.isMonitor = isMonitor;
+    }
+
+    public boolean isMonitor() {
+        return isMonitor;
     }
 
     public void setClientName(String name) {
@@ -352,6 +362,37 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         
         boolean isResp = true; 
         this.currentIsResp = true;
+
+        // Broadcast to Monitors (Redis format: timestamp [db lua/ip:port] "command" "args")
+        if (!Carade.monitors.isEmpty() && !cmd.equals("AUTH") && !cmd.equals("QUIT")) {
+            long now = System.currentTimeMillis();
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format(java.util.Locale.US, "%.6f", now / 1000.0)).append(" [").append(dbIndex).append(" ").append(ctx != null && ctx.channel().remoteAddress() != null ? ctx.channel().remoteAddress() : "0.0.0.0:0").append("] ");
+            sb.append("\"").append(cmd).append("\"");
+            for (int i = 1; i < parts.size(); i++) {
+                sb.append(" \"").append(new String(parts.get(i), StandardCharsets.UTF_8)).append("\"");
+            }
+            String logLine = sb.toString();
+            for (ClientHandler monitor : Carade.monitors) {
+                if (monitor != this) { // Don't echo to self if self is monitoring (unlikely but safe)
+                    monitor.send(monitor.isResp(), Resp.simpleString(logLine), logLine);
+                }
+            }
+        }
+
+        // Handle Monitor mode blocking
+        if (isMonitor) {
+            if (cmd.equals("QUIT")) {
+                ctx.close();
+                return;
+            }
+            // Monitors can only run QUIT (or RESET in newer Redis, but we just ignore/block others)
+            // Just return (block) or send error? Redis usually just blocks until QUIT.
+            // But if we send error, it might break client expectation of stream. 
+            // We just ignore other commands or treat them as part of the stream?
+            // Redis doc: "In this mode, the server will not process any other command from this client, but QUIT."
+            return; 
+        }
 
         // Handle Subs commands in Sub mode
         if (isSubscribed) {
