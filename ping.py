@@ -6,49 +6,69 @@ HOST = '127.0.0.1'
 PORT = 63790
 PASSWORD = os.getenv('CARADE_PASSWORD', 'teasertopsecret')
 
-# --- UTILITIES ---
+def read_resp(f):
+    """
+    Parses RESP responses properly.
+    """
+    try:
+        line = f.readline()
+        if not line: return None
+        p = line[:1]
+        payload = line[1:].strip()
+
+        if p in (b'+', b'-', b':'): return payload.decode()
+        if p == b'$':
+            l = int(payload)
+            if l == -1: return None
+            data = f.read(l)
+            f.read(2) # Skip CRLF
+            return data.decode()
+        if p == b'*':
+            return [read_resp(f) for _ in range(int(payload))]
+        return line.strip().decode()
+    except: return None
+
 def get_connection():
-    """Establishes a connection to the Carade server and performs authentication."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(5)
         s.connect((HOST, PORT))
+        f = s.makefile('rb')
         
-        # Authenticate immediately
-        s.sendall(f"AUTH {PASSWORD}\n".encode())
-        resp = s.recv(1024).decode()
+        # Auth with CRLF
+        s.sendall(f"AUTH {PASSWORD}\r\n".encode())
+        resp = read_resp(f)
         
-        if "OK" not in resp:
-            print(f"❌ Auth Failed: {resp.strip()}")
-            return None
-        return s
+        if resp != "OK":
+            print(f"❌ Auth Failed: {resp}")
+            return None, None
+        return s, f
     except Exception as e:
         print(f"❌ Connection failed: {e}")
-        return None
+        return None, None
 
-def send_cmd(sock, cmd):
-    """Sends a command and returns the response string."""
+def send_cmd(sock, f, cmd):
     try:
-        sock.sendall(f"{cmd}\n".encode())
-        return sock.recv(1024).decode().strip()
+        sock.sendall(f"{cmd}\r\n".encode())
+        return read_resp(f)
     except Exception as e:
         print(f"❌ Command failed: {e}")
         return None
 
-# --- MAIN ENTRY POINT ---
 def ping_server():
     print(f"\n🏓 CARADE PING")
     print(f"Target: {HOST}:{PORT}")
     
-    s = get_connection()
-    if not s:
+    conn = get_connection()
+    if not conn[0]:
         print("❌ Cannot connect to Server. Is Carade running?")
         return
     
+    s, f = conn
     print("Sending PING...", end=" ")
-    response = send_cmd(s, "PING")
+    response = send_cmd(s, f, "PING")
     
-    if response and "PONG" in response:
+    if response == "PONG":
         print(f"✅ {response}")
     else:
         print(f"❌ Unexpected response: {response}")

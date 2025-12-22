@@ -79,7 +79,9 @@ public class NettyRespDecoder extends ByteToMessageDecoder {
 
                 int length = eol - in.readerIndex();
                 String line = in.toString(in.readerIndex(), length, StandardCharsets.UTF_8);
-                in.readerIndex(eol + 2); // Skip \r\n
+
+                int terminatorLength = (in.getByte(eol) == '\r') ? 2 : 1;
+                in.readerIndex(eol + terminatorLength);
 
                 if (multiBulkLength == 0) {
                      // We just read *<count>
@@ -126,7 +128,9 @@ public class NettyRespDecoder extends ByteToMessageDecoder {
                  
                  int length = eol - in.readerIndex();
                  String line = in.toString(in.readerIndex(), length, StandardCharsets.UTF_8);
-                 in.readerIndex(eol + 2);
+                 
+                 int terminatorLength = (in.getByte(eol) == '\r') ? 2 : 1;
+                 in.readerIndex(eol + terminatorLength);
                  
                  try {
                      currentBulkLength = Integer.parseInt(line);
@@ -144,11 +148,16 @@ public class NettyRespDecoder extends ByteToMessageDecoder {
             }
             
             if (state == State.READ_BULK_CONTENT) {
-                if (in.readableBytes() < currentBulkLength + 2) return; // Need content + \r\n
+                // Check if we have enough data to determine terminator
+                if (in.readableBytes() < currentBulkLength + 1) return;
+
+                int terminatorLength = (in.getByte(in.readerIndex() + currentBulkLength) == '\r') ? 2 : 1;
+
+                if (in.readableBytes() < currentBulkLength + terminatorLength) return; // Need content + terminator
                 
                 byte[] content = new byte[currentBulkLength];
                 in.readBytes(content);
-                in.skipBytes(2); // Skip \r\n
+                in.skipBytes(terminatorLength); 
                 
                 currentArray.add(content);
                 checkArrayComplete(out);

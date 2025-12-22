@@ -1,78 +1,139 @@
 import socket
 import threading
 import os
+import sys
 
 # --- CONFIG ---
 HOST = '127.0.0.1'
 PORT = 63790
 PASSWORD = os.getenv('CARADE_PASSWORD', 'teasertopsecret')
-CHANNEL = 'general' # Default channel
+CHANNEL = 'general'
 
+# --- RESP PARSER (The "Better" Parser) ---
+def read_resp(f):
+    """
+    Recursively parses RESP data. 
+    This is critical for converting the server's raw ["message", "chan", "msg"] 
+    response into a Python list we can format cleanly.
+    """
+    try:
+        line = f.readline()
+        if not line: return None
+        
+        prefix = line[:1]
+        payload = line[1:].strip()
+
+        # Simple Strings (+), Errors (-), Integers (:)
+        if prefix in (b'+', b'-', b':'):
+            return payload.decode()
+        
+        # Bulk Strings ($) - The meat of the message
+        if prefix == b'$':
+            length = int(payload)
+            if length == -1: return None
+            data = f.read(length)
+            f.read(2) # Consume trailing CRLF
+            return data.decode()
+        
+        # Arrays (*) - Recursion happens here
+        if prefix == b'*':
+            return [read_resp(f) for _ in range(int(payload))]
+            
+        return line.strip().decode() # Fallback
+    except: return None
+
+def encode_cmd(args):
+    """
+    Encodes a list of arguments into a RESP Array.
+    This ensures 'Teaser: Hello World' is sent as one single argument,
+    preventing quote issues.
+    """
+    cmd = f"*{len(args)}\r\n"
+    for arg in args:
+        s_arg = str(arg)
+        cmd += f"${len(s_arg.encode('utf-8'))}\r\n{s_arg}\r\n"
+    return cmd.encode('utf-8')
+
+# --- WORKER ---
 def receive_messages(sock):
     """Listen for incoming messages from the server."""
+    # Use makefile for safe line-by-line reading
+    f = sock.makefile('rb') 
     try:
         while True:
-            data = sock.recv(4096).decode()
+            data = read_resp(f)
             if not data: break
-            # Filter out PONG or OK if they slip in
-            if data.strip() == "OK" or data.strip() == "PONG": continue
-            print(f"\r{data.strip()}\n> ", end="")
+            
+            # Filter standard protocol responses
+            if data == "OK" or data == "PONG": continue
+            
+            # Logic: If it's a PubSub list -> Print nicely
+            if isinstance(data, list) and len(data) == 3 and data[0] == "message":
+                # data[1] is channel, data[2] is content (e.g., "Name: Message")
+                print(f"\r[{data[1]}] {data[2]}\n> ", end="")
+            else:
+                # System/Error messages
+                print(f"\r[System] {data}\n> ", end="")
+            
+            sys.stdout.flush()
     except:
         print("\nDisconnected from server.")
         os._exit(0)
 
+# --- MAIN ---
 def main():
     name = input("Enter your name: ")
     print(f"Connecting to Carade at {HOST}:{PORT}...")
 
-    # 1. Connection for PUBLISHING (Sending)
+    # 1. Connection for PUBLISHING (Sender)
     try:
         sender = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sender.connect((HOST, PORT))
-        sender.sendall(f"AUTH {PASSWORD}\n".encode())
-        sender.recv(1024) # Eat Auth OK
+        sender.sendall(encode_cmd(["AUTH", PASSWORD]))
+        sender.recv(1024) # Skip Auth OK
     except:
-        print("❌ Could not connect (Sender). Check server.")
+        print("❌ Could not connect (Sender).")
         return
 
-    # 2. Connection for SUBSCRIBING (Listening)
+    # 2. Connection for SUBSCRIBING (Listener)
     try:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.connect((HOST, PORT))
-        listener.sendall(f"AUTH {PASSWORD}\n".encode())
-        listener.recv(1024) # Eat Auth OK
+        listener.sendall(encode_cmd(["AUTH", PASSWORD]))
+        listener.recv(1024)
         
-        # Subscribe
-        listener.sendall(f"SUBSCRIBE {CHANNEL}\n".encode())
+        # Subscribe using proper encoding
+        listener.sendall(encode_cmd(["SUBSCRIBE", CHANNEL]))
         print(f"✅ Joined channel '{CHANNEL}'. Start typing!")
         
-        # Start listening thread
         t = threading.Thread(target=receive_messages, args=(listener,))
         t.daemon = True
         t.start()
-
     except:
         print("❌ Could not connect (Listener).")
         return
 
-    # 3. Main Loop (Sending messages)
+    # 3. Main Loop
     print("> ", end="")
+    sys.stdout.flush()
     while True:
         try:
             msg = input()
             if msg.strip() == "/quit": break
-            # Publish format: PUBLISH channel "Name: Message"
-            safe_msg = f"{name}: {msg}"
-            sender.sendall(f'PUBLISH {CHANNEL} "{safe_msg}"\n'.encode())
-            # We don't read response from sender to keep UI clean, or we could.
-            sender.recv(1024) # Clear buffer (expected integer)
+            
+            # Format: "Name: Message"
+            full_msg = f"{name}: {msg}"
+            
+            # Send using RESP Encoder (Fixes the quote issue!)
+            sender.sendall(encode_cmd(["PUBLISH", CHANNEL, full_msg]))
+            
+            # Clear sender buffer to stay in sync
+            sender.recv(1024) 
+            
             print("> ", end="")
+            sys.stdout.flush()
         except KeyboardInterrupt:
             break
-
-    sender.close()
-    listener.close()
-    print("\nBye!")
 
 if __name__ == "__main__":
     main()
