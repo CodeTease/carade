@@ -13,6 +13,7 @@ import core.commands.zset.*;
 import core.commands.hll.*;
 import core.commands.json.*;
 import core.commands.bloom.*;
+import core.commands.tdigest.*;
 import core.commands.pubsub.*;
 import core.commands.transaction.*;
 
@@ -26,6 +27,7 @@ public class CommandRegistry {
 
     static {
         // String
+        register("GET", new GetCommand());
         register("SET", new SetCommand());
         register("SETNX", new SetNxCommand());
         register("INCR", new IncrCommand());
@@ -111,6 +113,11 @@ public class CommandRegistry {
         register("BF.ADD", new BfAddCommand());
         register("BF.EXISTS", new BfExistsCommand());
         
+        // T-Digest
+        register("TD.ADD", new TdAddCommand());
+        register("TD.QUANTILE", new TdQuantileCommand());
+        register("TD.INFO", new TdInfoCommand());
+
         // JSON
         register("JSON.SET", new JsonSetCommand());
         register("JSON.GET", new JsonGetCommand());
@@ -133,6 +140,7 @@ public class CommandRegistry {
         register("TTL", new TtlCommand());
         register("EXPIRE", new ExpireCommand());
         register("KEYS", new KeysCommand());
+        register("DEL", new DelCommand());
         register("UNLINK", new UnlinkCommand());
         register("SCAN", new ScanCommand());
         register("HSCAN", new ScanCommand());
