@@ -45,8 +45,14 @@ public class CommandRegistry {
         register("APPEND", new AppendCommand());
         register("GETRANGE", new GetRangeCommand());
         register("SETRANGE", new SetRangeCommand());
+        register("SETEX", new SetExCommand());
+        register("PSETEX", new PSetExCommand());
+        register("MSETNX", new MSetNxCommand());
+        register("GETDEL", new GetDelCommand());
+        register("GETEX", new GetExCommand());
 
         // Hash
+        register("HMSET", new HMSetCommand());
         register("HMGET", new HmgetCommand());
         register("HLEN", new HLenCommand());
         register("HKEYS", new HKeysCommand());
@@ -59,6 +65,8 @@ public class CommandRegistry {
         register("HINCRBYFLOAT", new HIncrByFloatCommand());
         register("HEXPIRE", new HExpireCommand());
         register("HTTL", new HTtlCommand());
+        register("HSTRLEN", new HStrLenCommand());
+        register("HRANDFIELD", new HRandFieldCommand());
 
         // List
         register("LLEN", new LLenCommand());
@@ -74,6 +82,10 @@ public class CommandRegistry {
         register("BLMOVE", new BlMoveCommand());
         register("RPOPLPUSH", new RPopLPushCommand());
         register("LMOVE", new LMoveCommand());
+        register("LPUSHX", new LPushXCommand());
+        register("RPUSHX", new RPushXCommand());
+        register("LSET", new LSetCommand());
+        register("LPOS", new LPosCommand());
 
         // Set
         register("SPOP", new SPopCommand());
@@ -108,6 +120,8 @@ public class CommandRegistry {
         register("ZPOPMAX", new ZPopMaxCommand());
         register("ZUNIONSTORE", new ZUnionStoreCommand());
         register("ZINTERSTORE", new ZInterStoreCommand());
+        register("ZREVRANK", new ZRevRankCommand());
+        register("ZMSCORE", new ZMScoreCommand());
 
         // Bloom
         register("BF.ADD", new BfAddCommand());
@@ -146,8 +160,10 @@ public class CommandRegistry {
         register("HSCAN", new ScanCommand());
         register("SSCAN", new ScanCommand());
         register("ZSCAN", new ScanCommand());
+        register("TOUCH", new TouchCommand());
 
         // Server / Config
+        register("TIME", new TimeCommand());
         register("CONFIG", new ConfigGetCommand());
         register("SLOWLOG", new SlowlogCommand());
         register("INFO", new InfoCommand());
@@ -161,8 +177,11 @@ public class CommandRegistry {
         register("GEOADD", new GeoAddCommand());
         register("GEODIST", new GeoDistCommand());
         register("GEORADIUS", new GeoRadiusCommand());
+        register("GEOHASH", new GeoHashCommand());
+        register("GEOPOS", new GeoPosCommand());
         
         // Connection
+        register("ECHO", new EchoCommand());
         register("SELECT", new SelectCommand());
         register("PING", new PingCommand());
         register("QUIT", new QuitCommand());
