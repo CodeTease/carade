@@ -8,6 +8,7 @@ import core.network.ClientHandler;
 import core.structs.tdigest.TDigest;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 public class TdInfoCommand implements Command {
@@ -33,12 +34,14 @@ public class TdInfoCommand implements Command {
 
         TDigest digest = (TDigest) entry.getValue();
         
-        client.sendArray(6);
-        client.sendBulkString("Compression");
-        client.sendBulkString(String.valueOf(digest.getCompression()));
-        client.sendBulkString("Centroids");
-        client.sendLong(digest.centroidCount());
-        client.sendBulkString("Count");
-        client.sendLong(digest.size());
+        List<Object> info = new ArrayList<>();
+        info.add("Compression".getBytes(StandardCharsets.UTF_8));
+        info.add(String.valueOf(digest.getCompression()).getBytes(StandardCharsets.UTF_8));
+        info.add("Centroids".getBytes(StandardCharsets.UTF_8));
+        info.add((long)digest.centroidCount()); 
+        info.add("Count".getBytes(StandardCharsets.UTF_8));
+        info.add(digest.size()); 
+        
+        client.sendMixedArray(info);
     }
 }
