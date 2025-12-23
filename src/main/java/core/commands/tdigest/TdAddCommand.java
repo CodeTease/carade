@@ -1,6 +1,7 @@
 package core.commands.tdigest;
 
 import core.commands.Command;
+import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
@@ -8,7 +9,7 @@ import core.structs.tdigest.TDigest;
 
 import java.util.List;
 
-public class TdAddCommand extends Command {
+public class TdAddCommand implements Command {
     @Override
     public void execute(ClientHandler client, List<byte[]> args) {
         if (args.size() < 3) {
@@ -18,13 +19,14 @@ public class TdAddCommand extends Command {
 
         String key = new String(args.get(1));
         
-        // Execute write
-        client.executeWrite(key, (db, existingValue) -> {
+        client.executeWrite(() -> {
+            CaradeDatabase db = CaradeDatabase.getInstance();
+            ValueEntry existingValue = db.get(client.getDbIndex(), key);
+            
             TDigest digest;
             if (existingValue == null) {
-                // Create new TDigest
                 digest = new TDigest();
-                db.put(key, new ValueEntry(DataType.TDIGEST, digest));
+                db.put(client.getDbIndex(), key, new ValueEntry(digest, DataType.TDIGEST, -1));
             } else {
                 if (existingValue.type != DataType.TDIGEST) {
                     client.sendError("WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -33,14 +35,10 @@ public class TdAddCommand extends Command {
                 digest = (TDigest) existingValue.getValue();
             }
 
-            // Parse values
-            // Format: TD.ADD key val [val ...]
-            int added = 0;
             for (int i = 2; i < args.size(); i++) {
                 try {
                     double val = Double.parseDouble(new String(args.get(i)));
                     digest.add(val);
-                    added++;
                 } catch (NumberFormatException e) {
                     client.sendError("ERR value is not a valid float");
                     return;
@@ -48,6 +46,6 @@ public class TdAddCommand extends Command {
             }
             
             client.sendSimpleString("OK");
-        });
+        }, "TD.ADD", args.toArray());
     }
 }
