@@ -143,4 +143,16 @@ public class TDigest implements Serializable {
     public double getCompression() {
         return compression;
     }
+
+    public synchronized TDigest copy() {
+        TDigest copy = new TDigest(this.compression);
+        copy.totalCount = this.totalCount;
+        for (Centroid c : this.centroids) {
+            copy.centroids.add(c.copy());
+        }
+        for (Centroid c : this.buffer) {
+            copy.buffer.add(c.copy());
+        }
+        return copy;
+    }
 }

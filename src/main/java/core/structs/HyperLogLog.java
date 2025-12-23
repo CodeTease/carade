@@ -170,4 +170,12 @@ public class HyperLogLog implements Serializable {
                    (((long) data[index + 7] & 0xff) << 56);
         }
     }
+
+    public HyperLogLog copy() {
+        HyperLogLog copy = new HyperLogLog();
+        System.arraycopy(this.registers, 0, copy.registers, 0, this.registers.length);
+        copy.dirty = this.dirty;
+        copy.cachedCount = this.cachedCount;
+        return copy;
+    }
 }

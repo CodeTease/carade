@@ -50,6 +50,9 @@ public class CommandRegistry {
         register("MSETNX", new MSetNxCommand());
         register("GETDEL", new GetDelCommand());
         register("GETEX", new GetExCommand());
+        register("COPY", new CopyCommand());
+        register("MOVE", new MoveCommand());
+        register("RENAMENX", new RenameNxCommand());
 
         // Hash
         register("HMSET", new HMSetCommand());
@@ -145,6 +148,8 @@ public class CommandRegistry {
         register("PTTL", new PttlCommand());
         register("EXPIREAT", new ExpireAtCommand());
         register("PEXPIREAT", new PexpireAtCommand());
+        register("EXPIRETIME", new ExpireTimeCommand());
+        register("PEXPIRETIME", new PExpireTimeCommand());
         register("PERSIST", new PersistCommand());
         register("RANDOMKEY", new RandomKeyCommand());
         register("SORT", new SortCommand());
@@ -172,6 +177,7 @@ public class CommandRegistry {
         register("FLUSHDB", new FlushDbCommand());
         register("BGREWRITEAOF", new BgRewriteAofCommand());
         register("MONITOR", new MonitorCommand());
+        register("SWAPDB", new SwapDbCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());

@@ -117,4 +117,49 @@ public class ValueEntry implements Serializable {
             }
         } catch (Exception e) {}
     }
+
+    @SuppressWarnings("unchecked")
+    public ValueEntry copy() {
+        Object newVal = null;
+        Object val = getValue(); // Ensure inflated
+        
+        switch (type) {
+            case STRING:
+                if (val instanceof byte[]) {
+                    newVal = ((byte[]) val).clone();
+                } else {
+                    newVal = val; // String or Integer are immutable
+                }
+                break;
+            case LIST:
+                newVal = new ConcurrentLinkedDeque<>((ConcurrentLinkedDeque<String>) val);
+                break;
+            case SET:
+                newVal = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+                ((Set<String>)newVal).addAll((Set<String>) val);
+                break;
+            case HASH:
+                newVal = new ConcurrentHashMap<>((ConcurrentHashMap<String, String>) val);
+                break;
+            case ZSET:
+                newVal = ((CaradeZSet) val).copy();
+                break;
+            case BLOOM:
+                newVal = ((core.structs.BloomFilter) val).copy();
+                break;
+            case HYPERLOGLOG:
+                newVal = ((core.structs.HyperLogLog) val).copy();
+                break;
+            case TDIGEST:
+                newVal = ((core.structs.tdigest.TDigest) val).copy();
+                break;
+            case JSON:
+                newVal = val; // Immutable structure or handled by library (Jackson JsonNode is immutable)
+                break;
+        }
+        
+        if (newVal == null) newVal = val; // Fallback
+        
+        return new ValueEntry(newVal, type, expireAt);
+    }
 }

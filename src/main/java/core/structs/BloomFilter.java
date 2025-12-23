@@ -100,4 +100,24 @@ public class BloomFilter implements Serializable {
         h1 ^= (h1 >>> 16);
         return h1;
     }
+
+    public BloomFilter copy() {
+        BloomFilter copy = new BloomFilter(1, 0.1); // Dummy values, will be overwritten
+        try {
+            java.lang.reflect.Field bitSizeField = BloomFilter.class.getDeclaredField("bitSize");
+            bitSizeField.setAccessible(true);
+            bitSizeField.setInt(copy, this.bitSize);
+
+            java.lang.reflect.Field hashCountField = BloomFilter.class.getDeclaredField("hashCount");
+            hashCountField.setAccessible(true);
+            hashCountField.setInt(copy, this.hashCount);
+
+            java.lang.reflect.Field bitSetField = BloomFilter.class.getDeclaredField("bitSet");
+            bitSetField.setAccessible(true);
+            bitSetField.set(copy, this.bitSet.clone());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to copy BloomFilter", e);
+        }
+        return copy;
+    }
 }

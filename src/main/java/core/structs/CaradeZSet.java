@@ -91,4 +91,11 @@ public class CaradeZSet implements Serializable {
         }
         return result;
     }
+
+    public CaradeZSet copy() {
+        CaradeZSet copy = new CaradeZSet();
+        copy.scores.putAll(this.scores);
+        copy.sorted.addAll(this.sorted);
+        return copy;
+    }
 }

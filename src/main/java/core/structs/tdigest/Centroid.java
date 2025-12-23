@@ -38,4 +38,8 @@ public class Centroid implements Comparable<Centroid>, Serializable {
     public String toString() {
         return "Centroid{mean=" + mean + ", count=" + count + "}";
     }
+
+    public Centroid copy() {
+        return new Centroid(this.mean, this.count);
+    }
 }
