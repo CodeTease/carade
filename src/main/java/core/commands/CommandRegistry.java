@@ -55,6 +55,8 @@ public class CommandRegistry {
         register("HINCRBY", new HIncrByCommand());
         register("HSETNX", new HSetNxCommand());
         register("HINCRBYFLOAT", new HIncrByFloatCommand());
+        register("HEXPIRE", new HExpireCommand());
+        register("HTTL", new HTtlCommand());
 
         // List
         register("LLEN", new LLenCommand());
@@ -145,6 +147,7 @@ public class CommandRegistry {
         register("FLUSHALL", new FlushAllCommand());
         register("FLUSHDB", new FlushDbCommand());
         register("BGREWRITEAOF", new BgRewriteAofCommand());
+        register("MONITOR", new MonitorCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());

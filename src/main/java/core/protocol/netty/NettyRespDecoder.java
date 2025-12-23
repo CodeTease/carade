@@ -43,10 +43,7 @@ public class NettyRespDecoder extends ByteToMessageDecoder {
                         state = State.READ_LINE_LENGTH;
                         multiBulkLength = 0;
                     } else {
-                        // Inline command (e.g. PING\r\n) or simple string
-                        // For simplicity in this refactor, we assume standard RESP Arrays for commands
-                        // But legacy telnet-style commands might just be text lines.
-                        // Let's handle simple inline commands if it's not *
+                        // Inline command
                         in.readerIndex(in.readerIndex() - 1); // Reset
                         state = State.READ_LINE_LENGTH; // Treat as line to parse
                         multiBulkLength = -1; // Special flag for inline

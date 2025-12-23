@@ -210,7 +210,6 @@ public class Carade {
         CommandRegistry.register("RPOP", new RPopCommand());
         CommandRegistry.register("HSET", new HSetCommand());
         CommandRegistry.register("HGET", new HGetCommand());
-        CommandRegistry.register("MONITOR", new core.commands.server.MonitorCommand());
 
         // Load Config
         config = Config.load("carade.conf");
