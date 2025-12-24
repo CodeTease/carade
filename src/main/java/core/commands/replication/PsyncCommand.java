@@ -14,10 +14,43 @@ import java.util.*;
 public class PsyncCommand implements Command {
     @Override
     public void execute(ClientHandler client, List<byte[]> args) {
-        // 1. Snapshot offset
+        // Parse arguments: PSYNC <replid> <offset>
+        String reqReplId = (args.size() > 1) ? new String(args.get(1), StandardCharsets.UTF_8) : "?";
+        long reqOffset = -1;
+        if (args.size() > 2) {
+            try {
+                reqOffset = Long.parseLong(new String(args.get(2), StandardCharsets.UTF_8));
+            } catch (NumberFormatException e) { reqOffset = -1; }
+        }
+
         ReplicationBacklog backlog = WriteSequencer.getInstance().getBacklog();
-        long startOffset = backlog.getGlobalOffset();
+        long currentGlobalOffset = backlog.getGlobalOffset();
         
+        // --- LOGIC QUAN TRỌNG ĐỂ "PASS" DEADLINE ---
+        // Kiểm tra xem có thể Partial Resync không?
+        // Điều kiện: Offset yêu cầu nằm trong vùng dữ liệu còn lưu trong Backlog
+        if (reqOffset != -1 && backlog.isValidOffset(reqOffset)) {
+            // +CONTINUE
+            String msg = "CONTINUE\r\n";
+            client.sendResponse(("+"+msg).getBytes(StandardCharsets.UTF_8), null);
+            
+            // Gửi phần dữ liệu còn thiếu từ backlog
+            // Tính toán lượng cần đọc: từ reqOffset đến hiện tại
+            int missingBytes = (int)(currentGlobalOffset - reqOffset);
+            if (missingBytes > 0) {
+                byte[] delta = backlog.readFrom(reqOffset, missingBytes);
+                if (delta != null) {
+                    client.sendResponse(delta, null);
+                }
+            }
+            
+            // Đăng ký làm Replica luôn để nhận data mới sau này
+            ReplicationManager.getInstance().addReplica(client);
+            return; // Xong! Không cần gửi RDB nặng nề.
+        }
+
+        // --- NẾU KHÔNG THỂ PARTIAL SYNC THÌ MỚI LÀM FULL SYNC (Code cũ) ---
+        long startOffset = currentGlobalOffset;
         String replId = "0000000000000000000000000000000000000000"; 
         
         // 2. Generate RDB to Temp File (Snapshot)

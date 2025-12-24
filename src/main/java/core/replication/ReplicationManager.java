@@ -47,7 +47,14 @@ public class ReplicationManager {
     public int getMasterPort() { return masterPort; }
     
     // Simplistic offset (needs proper implementation)
-    public long getReplicationOffset() { return 0; }
+    public long getReplicationOffset() { 
+        // Móc vào Backlog để lấy offset toàn cục thực tế
+        return WriteSequencer.getInstance().getBacklog().getGlobalOffset();
+    }
+    
+    public int getConnectedReplicasCount() {
+        return replicas.size();
+    }
 
     public void slaveOf(String host, int port) {
         if (host == null) {
