@@ -139,7 +139,7 @@ public class ReplicationManager {
                     // Execute locally using WriteSequencer to ensure AOF/Backlog consistency
                     WriteSequencer.getInstance().executeWrite(() -> {
                          // Calls the internal command execution logic
-                         Carade.executeInternal(parts);
+                         Carade.executeAofCommand(parts);
                     }, rawCmd);
                 }
 
