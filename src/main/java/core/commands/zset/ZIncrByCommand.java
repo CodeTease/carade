@@ -40,6 +40,7 @@ public class ZIncrByCommand implements Command {
                     return v;
                 });
                 Carade.notifyWatchers(key);
+                Carade.checkBlockers(key);
             }, "ZINCRBY", key, incrStr, member);
             
             String s = String.valueOf(ret[0]);

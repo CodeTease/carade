@@ -24,59 +24,13 @@ public class ClientCommand implements Command {
                 new ClientGetNameCommand().execute(client, args);
                 break;
             case "ID":
-                // Using hashCode as simple ID since we don't have unique long IDs yet
-                // Or maybe the activeConnections count is not unique enough. 
-                // Using System.identityHashCode or just the object hash.
-                client.sendInteger(System.identityHashCode(client));
+                new ClientIdCommand().execute(client, args);
                 break;
             case "LIST":
-                StringBuilder sb = new StringBuilder();
-                for (ClientHandler c : Carade.connectedClients) {
-                    sb.append("id=").append(System.identityHashCode(c))
-                      .append(" addr=").append(c.getRemoteAddress())
-                      .append(" name=").append(c.getClientName() == null ? "" : c.getClientName())
-                      .append(" db=").append(c.getDbIndex())
-                      .append("\n");
-                }
-                client.sendBulkString(sb.toString());
+                new ClientListCommand().execute(client, args);
                 break;
             case "KILL":
-                if (args.size() < 3) {
-                    client.sendError("ERR wrong number of arguments for 'client kill' command");
-                    return;
-                }
-                // Only implementing basic KILL ID <id> or KILL ADDR <addr> could be complex parsing
-                // For simplicity, let's assume argument is ID or ADDR.
-                // Redis syntax: CLIENT KILL [ip:port] [ID client-id] ...
-                // We'll support: CLIENT KILL ID <id>
-                String filterType = new String(args.get(2), StandardCharsets.UTF_8).toUpperCase();
-                
-                if (filterType.equals("ID") && args.size() >= 4) {
-                     try {
-                         long id = Long.parseLong(new String(args.get(3), StandardCharsets.UTF_8));
-                         int killed = 0;
-                         for (ClientHandler c : Carade.connectedClients) {
-                             if (System.identityHashCode(c) == id) {
-                                 c.close();
-                                 killed++;
-                             }
-                         }
-                         client.sendInteger(killed);
-                     } catch (NumberFormatException e) {
-                         client.sendError("ERR value is not an integer or out of range");
-                     }
-                } else {
-                     // Try to treat arg 2 as address
-                     String addr = new String(args.get(2), StandardCharsets.UTF_8);
-                     int killed = 0;
-                     for (ClientHandler c : Carade.connectedClients) {
-                         if (c.getRemoteAddress().contains(addr)) {
-                             c.close();
-                             killed++;
-                         }
-                     }
-                     client.sendInteger(killed);
-                }
+                new ClientKillCommand().execute(client, args);
                 break;
             case "PAUSE":
                 new core.commands.server.ClientPauseCommand().execute(client, args);

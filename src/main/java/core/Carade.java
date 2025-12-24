@@ -103,11 +103,17 @@ public class Carade {
         public final boolean isLeft;
         public final String targetKey; // For BRPOPLPUSH
         public final int dbIndex;
-        public BlockingRequest(boolean isLeft, int dbIndex) { this(isLeft, null, dbIndex); }
-        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex) { 
+        public final DataType expectedType;
+        
+        public BlockingRequest(boolean isLeft, int dbIndex) { this(isLeft, null, dbIndex, DataType.LIST); }
+        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex) { this(isLeft, targetKey, dbIndex, DataType.LIST); }
+        public BlockingRequest(boolean isLeft, int dbIndex, DataType type) { this(isLeft, null, dbIndex, type); }
+        
+        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex, DataType type) { 
             this.isLeft = isLeft; 
             this.targetKey = targetKey;
             this.dbIndex = dbIndex;
+            this.expectedType = type;
         }
     }
     public static final ConcurrentHashMap<String, ConcurrentLinkedQueue<BlockingRequest>> blockingRegistry = new ConcurrentHashMap<>();
@@ -119,9 +125,7 @@ public class Carade {
         synchronized (q) {
             while (!q.isEmpty()) {
                 ValueEntry v = db.get(key);
-                if (v == null || v.type != DataType.LIST) return;
-                ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
-                if (list.isEmpty()) return;
+                if (v == null) return;
                 
                 BlockingRequest req = q.peek();
                 if (req.future.isDone()) {
@@ -129,55 +133,86 @@ public class Carade {
                     continue;
                 }
                 
-                String val = req.isLeft ? list.pollFirst() : list.pollLast();
+                if (v.type != req.expectedType) return;
                 
-                if (val != null) {
-                    q.poll();
+                if (v.type == DataType.LIST) {
+                    ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
+                    if (list.isEmpty()) return;
                     
-                    if (req.targetKey != null) {
-                         // BRPOPLPUSH logic: push to target
-                         db.getStore(req.dbIndex).compute(req.targetKey, (k, valEntry) -> {
-                             if (valEntry == null) {
-                                 ConcurrentLinkedDeque<String> l = new ConcurrentLinkedDeque<>();
-                                 l.addFirst(val);
-                                 return new ValueEntry(l, DataType.LIST, -1);
-                             } else if (valEntry.type == DataType.LIST) {
-                                 ((ConcurrentLinkedDeque<String>) valEntry.getValue()).addFirst(val);
-                                 return valEntry;
-                             }
-                             return valEntry; // Should error, but blocking usually assumes success
-                         });
-                         notifyWatchers(req.targetKey);
-                    }
+                    String val = req.isLeft ? list.pollFirst() : list.pollLast();
                     
-                    boolean completed = req.future.complete(Arrays.asList(key.getBytes(StandardCharsets.UTF_8), val.getBytes(StandardCharsets.UTF_8)));
-                    if (!completed) {
-                        // Revert pop
-                        if (req.isLeft) list.addFirst(val); else list.addLast(val); 
-                        // Revert push if needed (complex, assuming complete() usually works if not done)
-                        // Actually if future was cancelled, we should revert everything.
+                    if (val != null) {
+                        q.poll();
+                        
                         if (req.targetKey != null) {
-                             db.getStore(req.dbIndex).computeIfPresent(req.targetKey, (k, valEntry) -> {
-                                 if (valEntry.type == DataType.LIST) {
-                                     ((ConcurrentLinkedDeque<String>) valEntry.getValue()).pollFirst();
+                             // BRPOPLPUSH logic: push to target
+                             db.getStore(req.dbIndex).compute(req.targetKey, (k, valEntry) -> {
+                                 if (valEntry == null) {
+                                     ConcurrentLinkedDeque<String> l = new ConcurrentLinkedDeque<>();
+                                     l.addFirst(val);
+                                     return new ValueEntry(l, DataType.LIST, -1);
+                                 } else if (valEntry.type == DataType.LIST) {
+                                     ((ConcurrentLinkedDeque<String>) valEntry.getValue()).addFirst(val);
+                                     return valEntry;
                                  }
                                  return valEntry;
                              });
+                             notifyWatchers(req.targetKey);
                         }
+                        
+                        boolean completed = req.future.complete(Arrays.asList(key.getBytes(StandardCharsets.UTF_8), val.getBytes(StandardCharsets.UTF_8)));
+                        if (!completed) {
+                            if (req.isLeft) list.addFirst(val); else list.addLast(val); 
+                            if (req.targetKey != null) {
+                                 db.getStore(req.dbIndex).computeIfPresent(req.targetKey, (k, valEntry) -> {
+                                     if (valEntry.type == DataType.LIST) {
+                                         ((ConcurrentLinkedDeque<String>) valEntry.getValue()).pollFirst();
+                                     }
+                                     return valEntry;
+                                 });
+                            }
+                            continue;
+                        }
+                        
+                        if (aofHandler != null) {
+                            if (req.targetKey != null) {
+                                aofHandler.log("RPOPLPUSH", key, req.targetKey);
+                            } else {
+                                aofHandler.log(req.isLeft ? "LPOP" : "RPOP", key);
+                            }
+                        }
+                        if (list.isEmpty()) db.remove(key);
+                    }
+                } else if (v.type == DataType.ZSET) {
+                    CaradeZSet zset = (CaradeZSet) v.getValue();
+                    if (zset.size() == 0) return;
+                    
+                    // isLeft=true -> Min, isLeft=false -> Max
+                    List<ZNode> nodes = req.isLeft ? zset.popMin(1) : zset.popMax(1);
+                    if (nodes.isEmpty()) return;
+                    ZNode node = nodes.get(0);
+                    
+                    q.poll();
+                    
+                    boolean completed = req.future.complete(Arrays.asList(
+                        key.getBytes(StandardCharsets.UTF_8), 
+                        node.member.getBytes(StandardCharsets.UTF_8), 
+                        String.valueOf(node.score).getBytes(StandardCharsets.UTF_8)
+                    ));
+                    
+                    if (!completed) {
+                        zset.add(node.score, node.member); // Revert
                         continue;
                     }
                     
-                    // AOF Logging
+                    // Replicate/AOF as ZREM? Or assume ZPOP supported
+                    // ZPOP is not standard for AOF in old redis, usually ZREM.
+                    // But if we support ZPOP commands, we can log ZPOP.
+                    // However, we popped.
                     if (aofHandler != null) {
-                        if (req.targetKey != null) {
-                            aofHandler.log("RPOPLPUSH", key, req.targetKey); // Assuming BRPOPLPUSH acts like RPOPLPUSH on success
-                        } else {
-                            aofHandler.log(req.isLeft ? "LPOP" : "RPOP", key);
-                        }
+                        aofHandler.log(req.isLeft ? "ZPOPMIN" : "ZPOPMAX", key);
                     }
-                    if (list.isEmpty()) db.remove(key);
-                } else {
-                    return;
+                    if (zset.size() == 0) db.remove(key);
                 }
             }
         }

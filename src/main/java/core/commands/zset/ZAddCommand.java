@@ -48,6 +48,7 @@ public class ZAddCommand implements Command {
                     return v;
                 });
                 Carade.notifyWatchers(key);
+                Carade.checkBlockers(key);
             }, "ZADD", (Object[]) cmdArgs);
             
             client.sendInteger(addedCount[0]);
