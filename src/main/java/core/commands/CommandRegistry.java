@@ -39,6 +39,8 @@ public class CommandRegistry {
         register("BITCOUNT", new BitCountCommand());
         register("BITOP", new BitOpCommand());
         register("BITPOS", new BitPosCommand());
+        register("BITFIELD", new BitFieldCommand());
+        register("BITFIELD_RO", new BitFieldRoCommand());
         register("SETBIT", new SetBitCommand());
         register("GETBIT", new GetBitCommand());
         register("MSET", new MSetCommand());
@@ -134,6 +136,8 @@ public class CommandRegistry {
         register("ZSCORE", new ZScoreCommand());
         register("ZRANGEBYSCORE", new ZRangeByScoreCommand());
         register("ZREVRANGEBYSCORE", new ZRevRangeByScoreCommand());
+        register("BZPOPMIN", new BzPopMinCommand());
+        register("BZPOPMAX", new BzPopMaxCommand());
         register("ZPOPMIN", new ZPopMinCommand());
         register("ZPOPMAX", new ZPopMaxCommand());
         register("ZUNIONSTORE", new ZUnionStoreCommand());
@@ -167,6 +171,8 @@ public class CommandRegistry {
         register("PFMERGE", new PfMergeCommand());
         
         // Time / Generic
+        register("LATENCY", new LatencyCommand());
+        register("WAIT", new WaitCommand());
         register("MIGRATE", new MigrateCommand());
         register("PEXPIRE", new PexpireCommand());
         register("PTTL", new PttlCommand());
