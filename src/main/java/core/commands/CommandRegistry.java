@@ -58,6 +58,8 @@ public class CommandRegistry {
         register("LCS", new LcsCommand());
 
         // Hash
+        register("HSET", new HSetCommand());
+        register("HGET", new HGetCommand());
         register("HMSET", new HMSetCommand());
         register("HMGET", new HmgetCommand());
         register("HLEN", new HLenCommand());
@@ -78,6 +80,8 @@ public class CommandRegistry {
         register("LLEN", new LLenCommand());
         register("LINDEX", new LIndexCommand());
         register("LREM", new LRemCommand());
+        register("LPOP", new LPopCommand());
+        register("RPOP", new RPopCommand());
         register("LPUSH", new LPushCommand());
         register("RPUSH", new RPushCommand());
         register("LTRIM", new LTrimCommand());
