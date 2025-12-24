@@ -7,9 +7,11 @@ import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.protocol.Resp;
 import core.structs.CaradeZSet;
+import core.structs.CaradeHash;
 
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ScanCommand implements Command {
     @Override
@@ -63,7 +65,11 @@ public class ScanCommand implements Command {
                      return;
                  }
                  if (cmd.equals("HSCAN") && entry.type == DataType.HASH) {
-                     it = ((java.util.concurrent.ConcurrentHashMap<String, String>)entry.getValue()).entrySet().iterator();
+                     if (entry.getValue() instanceof CaradeHash) {
+                         it = ((CaradeHash)entry.getValue()).map.entrySet().iterator();
+                     } else {
+                         it = ((ConcurrentHashMap<String, String>)entry.getValue()).entrySet().iterator();
+                     }
                  } else if (cmd.equals("SSCAN") && entry.type == DataType.SET) {
                      it = ((Set<String>)entry.getValue()).iterator();
                  } else if (cmd.equals("ZSCAN") && entry.type == DataType.ZSET) {

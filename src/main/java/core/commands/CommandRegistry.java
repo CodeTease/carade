@@ -49,11 +49,13 @@ public class CommandRegistry {
         register("SETEX", new SetExCommand());
         register("PSETEX", new PSetExCommand());
         register("MSETNX", new MSetNxCommand());
+        register("INCRBYFLOAT", new IncrByFloatCommand());
         register("GETDEL", new GetDelCommand());
         register("GETEX", new GetExCommand());
         register("COPY", new CopyCommand());
         register("MOVE", new MoveCommand());
         register("RENAMENX", new RenameNxCommand());
+        register("LCS", new LcsCommand());
 
         // Hash
         register("HMSET", new HMSetCommand());
@@ -91,10 +93,13 @@ public class CommandRegistry {
         register("LSET", new LSetCommand());
         register("LPOS", new LPosCommand());
         register("LINSERT", new LInsertCommand());
+        register("LMPOP", new LmPopCommand());
+        register("BLMPOP", new BlmPopCommand());
 
         // Set
         register("SPOP", new SPopCommand());
         register("SRANDMEMBER", new SRandMemberCommand());
+        register("SMOVE", new SMoveCommand());
         register("SADD", new SAddCommand());
         register("SMEMBERS", new SMembersCommand());
         register("SREM", new SRemCommand());
@@ -137,6 +142,7 @@ public class CommandRegistry {
         register("ZRANGESTORE", new ZRangeStoreCommand());
         register("ZREVRANK", new ZRevRankCommand());
         register("ZMSCORE", new ZMScoreCommand());
+        register("ZRANDMEMBER", new ZRandMemberCommand());
 
         // Bloom
         register("BF.ADD", new BfAddCommand());
@@ -166,6 +172,7 @@ public class CommandRegistry {
         register("PERSIST", new PersistCommand());
         register("RANDOMKEY", new RandomKeyCommand());
         register("SORT", new SortCommand());
+        register("SORT_RO", new SortRoCommand());
         register("EXISTS", new ExistsCommand());
         register("TYPE", new TypeCommand());
         register("RENAME", new RenameCommand());
@@ -184,7 +191,8 @@ public class CommandRegistry {
 
         // Server / Config
         register("TIME", new TimeCommand());
-        register("CONFIG", new ConfigGetCommand());
+        register("CONFIG", new ConfigCommand());
+        register("RESET", new ResetCommand());
         register("SLOWLOG", new SlowlogCommand());
         register("INFO", new InfoCommand());
         register("DBSIZE", new DbSizeCommand());
@@ -198,6 +206,7 @@ public class CommandRegistry {
         register("LASTSAVE", new LastSaveCommand());
         register("SHUTDOWN", new ShutdownCommand());
         register("ROLE", new RoleCommand());
+        register("LOLWUT", new LolwutCommand());
         register("COMMAND", new CommandInfoCommand());
         register("OBJECT", new ObjectCommand());
 
