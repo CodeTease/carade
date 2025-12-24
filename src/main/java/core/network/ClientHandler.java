@@ -92,6 +92,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         this.ctx = ctx;
         Carade.activeConnections.incrementAndGet();
+        Carade.connectedClients.add(this);
         super.channelActive(ctx);
     }
     
@@ -113,6 +114,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         Carade.monitors.remove(this);
         unwatchAll();
         Carade.activeConnections.decrementAndGet();
+        Carade.connectedClients.remove(this);
     }
 
     public void setMonitor(boolean isMonitor) {
@@ -497,5 +499,16 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         } else {
              send(out, isResp, Resp.error("ERR unknown command"), "(error) ERR unknown command");
         }
+    }
+
+    public String getRemoteAddress() {
+        if (ctx != null && ctx.channel().remoteAddress() != null) {
+            return ctx.channel().remoteAddress().toString();
+        }
+        return "0.0.0.0:0";
+    }
+
+    public void close() {
+        if (ctx != null) ctx.close();
     }
 }

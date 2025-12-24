@@ -34,6 +34,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.nio.charset.StandardCharsets;
 
@@ -54,6 +55,7 @@ public class Carade {
     // --- METRICS ---
     public static final AtomicLong totalCommands = new AtomicLong(0);
     public static final AtomicInteger activeConnections = new AtomicInteger(0);
+    public static final Set<ClientHandler> connectedClients = ConcurrentHashMap.newKeySet();
     public static final AtomicLong keyspaceHits = new AtomicLong(0);
     public static final AtomicLong keyspaceMisses = new AtomicLong(0);
     
@@ -726,12 +728,21 @@ public class Carade {
         scanRegistry.entrySet().removeIf(e -> (now - e.getValue().lastAccess) > 600000); // 10 mins
     }
 
-    private static void saveData() {
+    public static volatile long lastSaveTime = System.currentTimeMillis() / 1000;
+    public static final AtomicBoolean isSaving = new AtomicBoolean(false);
+
+    public static void saveData() {
+        if (!isSaving.compareAndSet(false, true)) {
+             throw new RuntimeException("Background save already in progress");
+        }
         try {
             new RdbEncoder().save(db, DUMP_FILE);
+            lastSaveTime = System.currentTimeMillis() / 1000;
             System.out.println("💾 Snapshot saved (RDB).");
         } catch (IOException e) {
             System.err.println("⚠️ Save failed: " + e.getMessage());
+        } finally {
+            isSaving.set(false);
         }
     }
     

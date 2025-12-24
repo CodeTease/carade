@@ -41,6 +41,13 @@ public class ReplicationManager {
     private volatile int masterPort = -1;
     private final AtomicBoolean isSlave = new AtomicBoolean(false);
     private Thread replicationThread;
+    
+    public boolean isSlave() { return isSlave.get(); }
+    public String getMasterHost() { return masterHost; }
+    public int getMasterPort() { return masterPort; }
+    
+    // Simplistic offset (needs proper implementation)
+    public long getReplicationOffset() { return 0; }
 
     public void slaveOf(String host, int port) {
         if (host == null) {

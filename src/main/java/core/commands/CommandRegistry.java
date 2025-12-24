@@ -89,6 +89,7 @@ public class CommandRegistry {
         register("RPUSHX", new RPushXCommand());
         register("LSET", new LSetCommand());
         register("LPOS", new LPosCommand());
+        register("LINSERT", new LInsertCommand());
 
         // Set
         register("SPOP", new SPopCommand());
@@ -97,6 +98,7 @@ public class CommandRegistry {
         register("SMEMBERS", new SMembersCommand());
         register("SREM", new SRemCommand());
         register("SISMEMBER", new SIsMemberCommand());
+        register("SMISMEMBER", new SMIsMemberCommand());
         register("SCARD", new SCardCommand());
         register("SINTER", new SInterCommand());
         register("SUNION", new SUnionCommand());
@@ -108,6 +110,9 @@ public class CommandRegistry {
         // ZSet
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
         register("ZREMRANGEBYRANK", new ZRemRangeByRankCommand());
+        register("ZREMRANGEBYLEX", new ZRemRangeByLexCommand());
+        register("ZLEXCOUNT", new ZLexCountCommand());
+        register("ZRANGEBYLEX", new ZRangeByLexCommand());
         register("ZADD", new ZAddCommand());
         register("ZRANGE", new ZRangeCommand());
         register("ZREVRANGE", new ZRevRangeCommand());
@@ -123,6 +128,10 @@ public class CommandRegistry {
         register("ZPOPMAX", new ZPopMaxCommand());
         register("ZUNIONSTORE", new ZUnionStoreCommand());
         register("ZINTERSTORE", new ZInterStoreCommand());
+        register("ZDIFF", new ZDiffCommand());
+        register("ZDIFFSTORE", new ZDiffStoreCommand());
+        register("ZINTER", new ZInterCommand());
+        register("ZUNION", new ZUnionCommand());
         register("ZREVRANK", new ZRevRankCommand());
         register("ZMSCORE", new ZMScoreCommand());
 
@@ -142,6 +151,7 @@ public class CommandRegistry {
         // HLL
         register("PFADD", new PfAddCommand());
         register("PFCOUNT", new PfCountCommand());
+        register("PFMERGE", new PfMergeCommand());
         
         // Time / Generic
         register("PEXPIRE", new PexpireCommand());
@@ -178,6 +188,11 @@ public class CommandRegistry {
         register("BGREWRITEAOF", new BgRewriteAofCommand());
         register("MONITOR", new MonitorCommand());
         register("SWAPDB", new SwapDbCommand());
+        register("SAVE", new SaveCommand());
+        register("BGSAVE", new BgSaveCommand());
+        register("LASTSAVE", new LastSaveCommand());
+        register("SHUTDOWN", new ShutdownCommand());
+        register("ROLE", new RoleCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());
@@ -215,23 +230,7 @@ public class CommandRegistry {
         register("REPLCONF", new ReplconfCommand());
         
         // CLIENT command router
-        register("CLIENT", new Command() {
-            @Override
-            public void execute(ClientHandler client, List<byte[]> args) {
-                if (args.size() < 2) {
-                    client.sendError("ERR wrong number of arguments for 'client' command");
-                    return;
-                }
-                String sub = new String(args.get(1)).toUpperCase();
-                if (sub.equals("SETNAME")) {
-                    new ClientSetNameCommand().execute(client, args);
-                } else if (sub.equals("GETNAME")) {
-                    new ClientGetNameCommand().execute(client, args);
-                } else {
-                    client.sendError("ERR unknown subcommand for 'client'");
-                }
-            }
-        });
+        register("CLIENT", new ClientCommand());
     }
 
     public static void register(String name, Command command) {
