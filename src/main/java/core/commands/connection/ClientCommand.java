@@ -75,13 +75,14 @@ public class ClientCommand implements Command {
                              killed++;
                          }
                      }
-                     if (killed == 0 && !filterType.equals("ID")) {
-                         // If not ID and no addr match, maybe it was just a failed ID syntax check
-                         // But if user typed "CLIENT KILL 12345", we treated "12345" as addr.
-                         // Redis allows `CLIENT KILL ip:port`.
-                     }
                      client.sendInteger(killed);
                 }
+                break;
+            case "PAUSE":
+                new core.commands.server.ClientPauseCommand().execute(client, args);
+                break;
+            case "UNPAUSE":
+                new core.commands.server.ClientUnpauseCommand().execute(client, args);
                 break;
             default:
                 client.sendError("ERR unknown subcommand for 'client'");

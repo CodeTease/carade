@@ -186,6 +186,8 @@ public class Carade {
     // --- PUB/SUB ENGINE (NEW!) ---
     public static PubSub pubSub = new PubSub();
 
+    public static volatile long pauseEndTime = 0; // For CLIENT PAUSE
+
     private static volatile boolean isRunning = true;
 
     public static void printBanner() {

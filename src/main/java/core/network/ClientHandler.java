@@ -352,6 +352,32 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof List) {
             List<byte[]> parts = (List<byte[]>) msg;
+            
+            // Check Pause (except for Admin/Unpause commands typically, but Redis pauses all interaction from clients)
+            // But if we pause, we should block processing.
+            // Redis CLIENT PAUSE pauses *processing* of commands from *all clients* (except the one issuing PAUSE sometimes? No, 6.2+ allows mode).
+            // Basic impl: sleep if paused?
+            // Netty runs in event loop. Sleeping blocks everything.
+            // If we sleep here, we block I/O.
+            // We should schedule execution later or check.
+            
+            if (Carade.pauseEndTime > System.currentTimeMillis()) {
+                 long diff = Carade.pauseEndTime - System.currentTimeMillis();
+                 if (diff > 0) {
+                     // We can't easily block Netty thread.
+                     // But strictly speaking, if we don't read, the socket buffer fills up.
+                     // The requirement is "stop processing commands".
+                     // So we can queue them or just delay processing.
+                     // Delay: schedule task.
+                     ctx.executor().schedule(() -> {
+                         try {
+                             channelRead(ctx, msg); 
+                         } catch (Exception e) {}
+                     }, diff, TimeUnit.MILLISECONDS);
+                     return;
+                 }
+            }
+
             handleCommand(parts);
         }
     }

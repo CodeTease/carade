@@ -144,4 +144,13 @@ public class PubSub {
     
     public int getChannelCount() { return channels.size(); }
     public int getPatternCount() { return patterns.size(); }
+
+    public List<String> getChannels() {
+        return new ArrayList<>(channels.keySet());
+    }
+    
+    public int getNumSub(String channel) {
+        Set<Subscriber> subs = channels.get(channel);
+        return subs == null ? 0 : subs.size();
+    }
 }

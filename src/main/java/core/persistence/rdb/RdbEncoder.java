@@ -22,6 +22,43 @@ public class RdbEncoder {
         }
     }
 
+    public void encodeValue(DataOutputStream dos, ValueEntry v) throws IOException {
+        if (v.type == DataType.STRING) {
+            writeString(dos, (byte[]) v.getValue());
+        } else if (v.type == DataType.LIST) {
+            ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
+            writeLen(dos, list.size());
+            for (String s : list) writeString(dos, s);
+        } else if (v.type == DataType.SET) {
+            Set<String> set = (Set<String>) v.getValue();
+            writeLen(dos, set.size());
+            for (String s : set) writeString(dos, s);
+        } else if (v.type == DataType.ZSET) {
+            CaradeZSet zset = (CaradeZSet) v.getValue();
+            writeLen(dos, zset.size());
+            for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
+                writeString(dos, e.getKey());
+                double score = e.getValue();
+                String sScore;
+                if (Double.isInfinite(score)) {
+                    sScore = (score > 0) ? "+inf" : "-inf"; 
+                } else {
+                    sScore = String.valueOf(score);
+                }
+                byte[] bScore = sScore.getBytes(StandardCharsets.US_ASCII);
+                dos.write(bScore.length); // 8 bit len
+                dos.write(bScore);
+            }
+        } else if (v.type == DataType.HASH) {
+            ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
+            writeLen(dos, map.size());
+            for (Map.Entry<String, String> e : map.entrySet()) {
+                writeString(dos, e.getKey());
+                writeString(dos, e.getValue());
+            }
+        }
+    }
+
     public void encode(CaradeDatabase db, DataOutputStream dos) throws IOException {
         // Header
         dos.write(RdbConstants.RDB_MAGIC.getBytes(StandardCharsets.US_ASCII));
@@ -68,43 +105,7 @@ public class RdbEncoder {
                 writeString(dos, entry.getKey());
                 
                 // Value
-                if (v.type == DataType.STRING) {
-                    writeString(dos, (byte[]) v.getValue());
-                } else if (v.type == DataType.LIST) {
-                    ConcurrentLinkedDeque<String> list = (ConcurrentLinkedDeque<String>) v.getValue();
-                    writeLen(dos, list.size());
-                    for (String s : list) writeString(dos, s);
-                } else if (v.type == DataType.SET) {
-                    Set<String> set = (Set<String>) v.getValue();
-                    writeLen(dos, set.size());
-                    for (String s : set) writeString(dos, s);
-                } else if (v.type == DataType.ZSET) {
-                    CaradeZSet zset = (CaradeZSet) v.getValue();
-                    writeLen(dos, zset.size());
-                    for (Map.Entry<String, Double> e : zset.scores.entrySet()) {
-                        writeString(dos, e.getKey());
-                        
-                        // Write score as string to avoid endianness issues
-                        double score = e.getValue();
-                        String sScore;
-                        if (Double.isInfinite(score)) {
-                            sScore = (score > 0) ? "+inf" : "-inf"; 
-                        } else {
-                            sScore = String.valueOf(score);
-                        }
-                        
-                        byte[] bScore = sScore.getBytes(StandardCharsets.US_ASCII);
-                        dos.write(bScore.length); // 8 bit len
-                        dos.write(bScore);
-                    }
-                } else if (v.type == DataType.HASH) {
-                    ConcurrentHashMap<String, String> map = (ConcurrentHashMap<String, String>) v.getValue();
-                    writeLen(dos, map.size());
-                    for (Map.Entry<String, String> e : map.entrySet()) {
-                        writeString(dos, e.getKey());
-                        writeString(dos, e.getValue());
-                    }
-                }
+                encodeValue(dos, v);
             }
         }
         

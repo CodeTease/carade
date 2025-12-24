@@ -38,6 +38,7 @@ public class CommandRegistry {
         register("STRLEN", new StrLenCommand());
         register("BITCOUNT", new BitCountCommand());
         register("BITOP", new BitOpCommand());
+        register("BITPOS", new BitPosCommand());
         register("SETBIT", new SetBitCommand());
         register("GETBIT", new GetBitCommand());
         register("MSET", new MSetCommand());
@@ -132,6 +133,8 @@ public class CommandRegistry {
         register("ZDIFFSTORE", new ZDiffStoreCommand());
         register("ZINTER", new ZInterCommand());
         register("ZUNION", new ZUnionCommand());
+        register("ZINTERCARD", new ZInterCardCommand());
+        register("ZRANGESTORE", new ZRangeStoreCommand());
         register("ZREVRANK", new ZRevRankCommand());
         register("ZMSCORE", new ZMScoreCommand());
 
@@ -170,6 +173,8 @@ public class CommandRegistry {
         register("EXPIRE", new ExpireCommand());
         register("KEYS", new KeysCommand());
         register("DEL", new DelCommand());
+        register("DUMP", new DumpCommand());
+        register("RESTORE", new RestoreCommand());
         register("UNLINK", new UnlinkCommand());
         register("SCAN", new ScanCommand());
         register("HSCAN", new ScanCommand());
@@ -193,11 +198,14 @@ public class CommandRegistry {
         register("LASTSAVE", new LastSaveCommand());
         register("SHUTDOWN", new ShutdownCommand());
         register("ROLE", new RoleCommand());
+        register("COMMAND", new CommandInfoCommand());
+        register("OBJECT", new ObjectCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());
         register("GEODIST", new GeoDistCommand());
         register("GEORADIUS", new GeoRadiusCommand());
+        register("GEORADIUSBYMEMBER", new GeoRadiusByMemberCommand());
         register("GEOHASH", new GeoHashCommand());
         register("GEOPOS", new GeoPosCommand());
         
@@ -214,6 +222,7 @@ public class CommandRegistry {
         register("PSUBSCRIBE", new PSubscribeCommand());
         register("PUNSUBSCRIBE", new PUnsubscribeCommand());
         register("PUBLISH", new PublishCommand());
+        register("PUBSUB", new PubSubCommand());
 
         // Transactions
         register("MULTI", new MultiCommand());
