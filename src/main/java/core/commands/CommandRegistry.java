@@ -16,6 +16,7 @@ import core.commands.bloom.*;
 import core.commands.tdigest.*;
 import core.commands.pubsub.*;
 import core.commands.transaction.*;
+import core.commands.scripting.*;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -221,6 +222,11 @@ public class CommandRegistry {
         register("LOLWUT", new LolwutCommand());
         register("COMMAND", new CommandInfoCommand());
         register("OBJECT", new ObjectCommand());
+
+        // Scripting
+        register("EVAL", new EvalCommand());
+        register("EVALSHA", new EvalShaCommand());
+        register("SCRIPT", new ScriptCommand());
 
         // GEO
         register("GEOADD", new GeoAddCommand());

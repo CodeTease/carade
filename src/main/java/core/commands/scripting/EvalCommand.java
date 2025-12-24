@@ -1,0 +1,76 @@
+package core.commands.scripting;
+
+import core.commands.Command;
+import core.network.ClientHandler;
+import core.scripting.ScriptManager;
+import core.protocol.Resp;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+public class EvalCommand implements Command {
+    @Override
+    public void execute(ClientHandler client, List<byte[]> args) {
+        // EVAL script numkeys key [key ...] arg [arg ...]
+        if (args.size() < 3) {
+            client.sendError("ERR wrong number of arguments for 'eval' command");
+            return;
+        }
+
+        String script = new String(args.get(1), StandardCharsets.UTF_8);
+        
+        int numKeys;
+        try {
+            numKeys = Integer.parseInt(new String(args.get(2), StandardCharsets.UTF_8));
+        } catch (NumberFormatException e) {
+            client.sendError("ERR value is not an integer or out of range");
+            return;
+        }
+        
+        if (numKeys < 0) {
+            client.sendError("ERR value is not an integer or out of range");
+            return;
+        }
+        
+        if (args.size() < 3 + numKeys) {
+            client.sendError("ERR wrong number of arguments for 'eval' command");
+            return;
+        }
+
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < numKeys; i++) {
+            keys.add(new String(args.get(3 + i), StandardCharsets.UTF_8));
+        }
+
+        List<String> scriptArgs = new ArrayList<>();
+        for (int i = 3 + numKeys; i < args.size(); i++) {
+            scriptArgs.add(new String(args.get(i), StandardCharsets.UTF_8));
+        }
+
+        try {
+            Object result = ScriptManager.getInstance().eval(client, script, keys, scriptArgs);
+            if (result == null) {
+                client.sendNull();
+            } else if (result instanceof Long) {
+                client.sendInteger((Long) result);
+            } else if (result instanceof byte[]) {
+                client.send(true, Resp.bulkString((byte[]) result), null);
+            } else if (result instanceof String) { // Simple String usually from StatusReply
+                client.sendSimpleString((String) result); 
+                // Wait, LuaConverter.toJava returns String for SimpleString and byte[] for Bulk.
+                // But it also returns String for normal strings?
+                // LuaString -> byte[].
+                // LuaTable {ok="OK"} -> String.
+                // So if String, it is Simple String.
+            } else if (result instanceof List) {
+                client.sendMixedArray((List<Object>) result);
+            } else if (result instanceof core.scripting.RespParser.RespError) {
+                client.sendError(((core.scripting.RespParser.RespError) result).message);
+            } else {
+                client.sendError("ERR Unknown result type from script");
+            }
+        } catch (Exception e) {
+            client.sendError(e.getMessage());
+        }
+    }
+}

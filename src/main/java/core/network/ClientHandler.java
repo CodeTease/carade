@@ -312,7 +312,8 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                              "RENAME", "ZREM", "SETBIT", "INCR", "DECR", "EXPIRE", 
                              "MSET", "ZADD", "ZINCRBY", "RPOPLPUSH", "LTRIM", "BITOP", "PFADD",
                              "ZPOPMIN", "ZPOPMAX", "HSETNX", "HINCRBYFLOAT", "LMOVE", "BLMOVE", "UNLINK", "BF.ADD",
-                             "SETEX", "PSETEX", "MSETNX", "GETDEL", "GETEX", "LPUSHX", "RPUSHX", "LSET", "HMSET", "HEXPIRE").contains(cmd);
+                             "SETEX", "PSETEX", "MSETNX", "GETDEL", "GETEX", "LPUSHX", "RPUSHX", "LSET", "HMSET", "HEXPIRE",
+                             "EVAL", "EVALSHA", "SCRIPT").contains(cmd);
     }
     
     private boolean isAdminCommand(String cmd) {
