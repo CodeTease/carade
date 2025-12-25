@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.nio.charset.StandardCharsets;
 
+import core.utils.Log;
+
 /**
  * Project: Carade
  * Version: 0.3.0
@@ -226,7 +228,7 @@ public class Carade {
     private static volatile boolean isRunning = true;
 
     public static void printBanner() {
-        System.out.println("\n" +
+        Log.info("\n" +
                 "   ______                     __   \n" +
                 "  / ____/___ ______________  / /__ \n" +
                 " / /   / __ `/ ___/ __  / __  / _ \\\n" +
@@ -241,7 +243,7 @@ public class Carade {
     private static final ClientHandler aofClient = new ClientHandler();
 
     public static void main(String[] args) throws Exception {
-        System.out.println("\n--- CARADE v0.3.0 ---\n");
+        Log.info("\n--- CARADE v0.3.0 ---\n");
         
         // Register Commands
         CommandRegistry.register("SET", new SetCommand());
@@ -269,62 +271,60 @@ public class Carade {
         loadData();
         aofHandler.replay(cmd -> executeAofCommand(cmd));
 
-        // 1. Janitor (Refactored)
-        Thread janitor = new Thread(() -> {
-            long lastMaintenance = System.currentTimeMillis();
-            // State for active expire (round-robin through DBs)
-            int currentDbIndex = 0;
-            Iterator<Map.Entry<String, ValueEntry>>[] iterators = new Iterator[CaradeDatabase.DB_COUNT];
-            
-            while (isRunning) {
-                try {
-                    // --- Active Expiration (Fast Loop ~100ms) ---
-                    // Strategy: Check a few keys in one DB, then switch DB next time
-                    if (db.size() > 0) {
-                        int keysToCheck = 20;
-                        int expiredCount = 0;
-                        
-                        // Get or create iterator for current DB
-                        if (iterators[currentDbIndex] == null || !iterators[currentDbIndex].hasNext()) {
-                            iterators[currentDbIndex] = db.entrySet(currentDbIndex).iterator();
-                        }
-                        
-                        Iterator<Map.Entry<String, ValueEntry>> it = iterators[currentDbIndex];
-                        while (it.hasNext() && keysToCheck > 0) {
-                            Map.Entry<String, ValueEntry> entry = it.next();
-                            if (entry.getValue().isExpired()) {
-                                it.remove();
-                                if (aofHandler != null) {
-                                    aofHandler.log("SELECT", String.valueOf(currentDbIndex)); 
-                                    aofHandler.log("DEL", entry.getKey()); 
-                                }
-                                expiredCount++;
-                            }
-                            keysToCheck--;
-                        }
-                        
-                        // Move to next DB for next cycle
-                        currentDbIndex = (currentDbIndex + 1) % CaradeDatabase.DB_COUNT;
-                    }
-
-                    // --- Maintenance (Slow Loop ~30s) ---
-                    long now = System.currentTimeMillis();
-                    if (now - lastMaintenance > 30000) {
-                        cleanupExpiredCursors();
-                        saveData();
-                        System.out.println("[Janitor] Cleanup cycle completed. Database size: " + db.size());
-                        lastMaintenance = now;
-                    }
-
-                    Thread.sleep(100); // 100ms interval
-                } catch (InterruptedException e) { break; }
-                catch (Exception e) {
-                    System.err.println("[Janitor] Error: " + e.getMessage());
-                }
-            }
+        // 1. Janitor (Refactored to ScheduledExecutorService)
+        ScheduledExecutorService janitor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Janitor");
+            t.setDaemon(true);
+            return t;
         });
-        janitor.setDaemon(true);
-        janitor.start();
+
+        // Use an array to hold state (lastMaintenance, currentDbIndex) because lambdas require final/effectively final
+        // State: [0] = lastMaintenance, [1] = currentDbIndex
+        final long[] janitorState = { System.currentTimeMillis(), 0 };
+        final Iterator<Map.Entry<String, ValueEntry>>[] iterators = new Iterator[CaradeDatabase.DB_COUNT];
+
+        janitor.scheduleAtFixedRate(() -> {
+            try {
+                // --- Active Expiration (Fast Loop ~100ms) ---
+                if (db.size() > 0) {
+                    int keysToCheck = 20;
+                    int expiredCount = 0;
+                    int currentDbIndex = (int) janitorState[1];
+
+                    if (iterators[currentDbIndex] == null || !iterators[currentDbIndex].hasNext()) {
+                        iterators[currentDbIndex] = db.entrySet(currentDbIndex).iterator();
+                    }
+
+                    Iterator<Map.Entry<String, ValueEntry>> it = iterators[currentDbIndex];
+                    while (it.hasNext() && keysToCheck > 0) {
+                        Map.Entry<String, ValueEntry> entry = it.next();
+                        if (entry.getValue().isExpired()) {
+                            it.remove();
+                            if (aofHandler != null) {
+                                aofHandler.log("SELECT", String.valueOf(currentDbIndex));
+                                aofHandler.log("DEL", entry.getKey());
+                            }
+                            expiredCount++;
+                        }
+                        keysToCheck--;
+                    }
+
+                    // Update DB index for next run
+                    janitorState[1] = (currentDbIndex + 1) % CaradeDatabase.DB_COUNT;
+                }
+
+                // --- Maintenance (Slow Loop ~30s) ---
+                long now = System.currentTimeMillis();
+                if (now - janitorState[0] > 30000) {
+                    cleanupExpiredCursors();
+                    saveData();
+                    Log.info("[Janitor] Cleanup cycle completed. Database size: " + db.size());
+                    janitorState[0] = now;
+                }
+            } catch (Exception e) {
+                Log.error("[Janitor] Error: " + e.getMessage());
+            }
+        }, 0, 100, TimeUnit.MILLISECONDS);
 
         // 2. Monitor
         Thread monitor = new Thread(() -> {
@@ -337,8 +337,8 @@ public class Carade {
                     lastCount = currentCount;
                     
                     if (ops > 0 || activeConnections.get() > 0) {
-                        System.out.printf("📊 [STATS] Clients: %d | Keys: %d | Channels: %d | Patterns: %d | OPS: %d cmd/s\n", 
-                            activeConnections.get(), db.size(), pubSub.getChannelCount(), pubSub.getPatternCount(), ops);
+                        Log.info(String.format("📊 [STATS] Clients: %d | Keys: %d | Channels: %d | Patterns: %d | OPS: %d cmd/s", 
+                            activeConnections.get(), db.size(), pubSub.getChannelCount(), pubSub.getPatternCount(), ops));
                     }
                 } catch (InterruptedException e) { break; }
             }
@@ -365,11 +365,11 @@ public class Carade {
              });
 
             ChannelFuture f = b.bind(config.port).sync();
-            System.out.println("🔥 Ready on port " + config.port);
-            System.out.println("🔒 Max Memory: " + (config.maxMemory == 0 ? "Unlimited" : config.maxMemory + " bytes"));
+            Log.info("🔥 Ready on port " + config.port);
+            Log.info("🔒 Max Memory: " + (config.maxMemory == 0 ? "Unlimited" : config.maxMemory + " bytes"));
             
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\n🛑 Shutting down...");
+                Log.info("\n🛑 Shutting down...");
                 saveData();
                 aofHandler.close();
                 bossGroup.shutdownGracefully();
@@ -403,10 +403,10 @@ public class Carade {
                 // But some commands might touch synchronized structures.
                 cmd.execute(aofClient, parts);
             } else {
-                 System.err.println("⚠️ Unknown command in AOF: " + cmdName);
+                 Log.error("⚠️ Unknown command in AOF: " + cmdName);
             }
         } catch (Exception e) {
-            System.err.println("⚠️ Error executing AOF command: " + cmdName + " - " + e.getMessage());
+            Log.error("⚠️ Error executing AOF command: " + cmdName + " - " + e.getMessage());
         }
     }
     
@@ -425,9 +425,9 @@ public class Carade {
         try {
             new RdbEncoder().save(db, DUMP_FILE);
             lastSaveTime = System.currentTimeMillis() / 1000;
-            System.out.println("💾 Snapshot saved (RDB).");
+            Log.info("💾 Snapshot saved (RDB).");
         } catch (IOException e) {
-            System.err.println("⚠️ Save failed: " + e.getMessage());
+            Log.error("⚠️ Save failed: " + e.getMessage());
         } finally {
             isSaving.set(false);
         }
@@ -459,9 +459,9 @@ public class Carade {
             String header = new String(magic);
 
             if (header.equals("REDIS")) {
-                 System.out.println("📂 Detected RDB file. Loading...");
+                 Log.info("📂 Detected RDB file. Loading...");
                  new RdbParser(is).parse(db);
-                 System.out.println("📂 Loaded " + db.size() + " keys (RDB).");
+                 Log.info("📂 Loaded " + db.size() + " keys (RDB).");
             } else if (header.startsWith("CARD")) {
                  // Fallback to legacy CARD parser
                  try (DataInputStream dis = new DataInputStream(is)) { // Wrap the same stream
@@ -523,18 +523,19 @@ public class Carade {
                             if (!ve.isExpired()) db.put(key, ve);
                         } catch (EOFException e) { break; }
                      }
-                     System.out.println("📂 Loaded " + db.size() + " keys (Snapshot CARD).");
+                     Log.info("📂 Loaded " + db.size() + " keys (Snapshot CARD).");
                  }
             } else {
                  loadLegacyData(); // Object stream
             }
         } catch (Exception e) {
-             System.out.println("⚠️ Load failed: " + e.getMessage());
+             Log.error("⚠️ Load failed: " + e.getMessage());
              e.printStackTrace();
         }
     }
     
     private static void loadLegacyData() {
+         Log.warn("⚠️ DEPRECATED: Loading legacy Java serialized data. This is insecure and will be removed in future versions.");
          File f = new File(DUMP_FILE);
          try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(f))) {
             Object loaded = ois.readObject();
@@ -554,11 +555,11 @@ public class Carade {
                         db.put(key, ve);
                     }
                 }
-                System.out.println("📂 Loaded " + db.size() + " keys (Legacy).");
+                Log.info("📂 Loaded " + db.size() + " keys (Legacy).");
                 saveData();
             }
         } catch (Exception ex) {
-            System.out.println("⚠️ Legacy load failed. Starting fresh.");
+            Log.error("⚠️ Legacy load failed. Starting fresh.");
             db.clear();
         }
     }
