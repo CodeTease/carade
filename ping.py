@@ -56,7 +56,7 @@ def send_cmd(sock, f, cmd):
         return None
 
 def ping_server():
-    print(f"\n🏓 CARADE PING")
+    print("\n🏓 CARADE PING")
     print(f"Target: {HOST}:{PORT}")
     
     conn = get_connection()

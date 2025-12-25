@@ -108,12 +108,12 @@ def stress_worker(thread_id, success_counter):
 
 # --- MAIN ---
 def run_benchmark():
-    print(f"\n🏋️  CARADE BENCHMARK")
+    print("\n🏋️  CARADE BENCHMARK")
     print(f"Target: {HOST}:{PORT}")
     
     if not test_new_features(): return
 
-    print(f"\n🚀 Starting stress test...")
+    print("\n🚀 Starting stress test...")
     start_time = time.time()
     
     threads = []
@@ -130,7 +130,7 @@ def run_benchmark():
     total = success_counter[0] * 2
     
     print("\n" + "="*30)
-    print(f"🔥 FINAL RESULTS")
+    print("🔥 FINAL RESULTS")
     print(f"✅ Total Ops:    {total:,}")
     print(f"⏱️  Duration:     {duration:.2f}s")
     print(f"🚀 Throughput:   {total/duration:,.0f} ops/sec")
