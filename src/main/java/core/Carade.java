@@ -242,8 +242,15 @@ public class Carade {
         // Override with env var if present (legacy support)
         if (System.getenv("CARADE_PASSWORD") != null) {
             config.password = System.getenv("CARADE_PASSWORD");
-            config.users.get("default").password = config.password;
         }
+        
+        // Always sync default user password
+        Config.User defaultUser = config.users.get("default");
+        if (defaultUser == null) {
+            defaultUser = new Config.User("default", config.password, true, true);
+            config.users.put("default", defaultUser);
+        }
+        defaultUser.password = config.password;
 
         // Initialize AOF
         aofHandler = CommandLogger.getInstance();

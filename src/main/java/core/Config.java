@@ -18,6 +18,7 @@ public class Config {
 
     public Config() {
         // Default constructor for Jackson
+        this.users.put("default", new User("default", this.password, true, true));
     }
 
     public static class User {
@@ -48,8 +49,6 @@ public class Config {
         }
 
         Config config = new Config();
-        // Default user
-        config.users.put("default", new User("default", config.password, true, true));
 
         if (!f.exists()) {
              System.out.println("⚠️ Config file not found: " + filename + ". Using defaults.");
