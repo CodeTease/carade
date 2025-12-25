@@ -1,4 +1,4 @@
-name: Carade CI Test
+name: Carade CI
 
 on:
   push:
@@ -10,85 +10,61 @@ jobs:
   test:
     name: Java CI
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: 'maven'
-
-      - name: Build with Maven
-        run: mvn clean compile
-
-      - name: Start Carade Server
+      - run: mvn clean compile
+      - name: Start Server
         run: |
           mvn exec:java > carade.log 2>&1 &
           echo $! > server.pid
-          
-      - name: Wait for Server to be ready
+      - name: Wait for Server
         run: |
           attempt=0
           until nc -z localhost 63790 || [ $attempt -eq 15 ]; do
-            echo "Waiting for Carade to wake up... (Attempt $((attempt + 1))/15)"
             sleep 1
             attempt=$((attempt + 1))
           done
-          
-          if ! nc -z localhost 63790; then
-            echo "❌ Failed to connect to Carade!"
-            echo "=== SERVER LOGS (START) ==="
-            cat carade.log
-            echo "=== SERVER LOGS (END) ==="
-            exit 1
-          fi
-          echo "✅ Carade is up and running!"
-
-      - name: Run PING Test 
+      - name: Run Tests
         env:
           CARADE_PASSWORD: teasertopsecret
         run: |
           python3 ping.py
-
-      - name: Run Benchmark Test 
-        env:
-          CARADE_PASSWORD: teasertopsecret
-        run: |
           python3 benchmark.py
-
-      - name: Show Server Logs (Always run if failed)
-        if: failure()
-        run: |
-          echo "=== FINAL SERVER LOGS ==="
-          cat carade.log
-
-      - name: Stop Server
+      - name: Cleanup
         if: always()
         run: |
-          if [ -f server.pid ]; then
-            kill $(cat server.pid)
-          fi
-          
+          [ -f server.pid ] && kill $(cat server.pid)
+
   docker-test:
     name: Docker CI
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Build Docker image
-      run: docker build -t carade .
-    - name: Run Docker container
-      run: docker run -d -p 6379:6379 --name carade carade
-    - name: Wait for startup
-      run: sleep 10
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
-    - name: Run ping test
-      run: python ping.py
-    - name: Run benchmark
-      run: python benchmark.py
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t carade .
+      - name: Run
+        run: docker run -d -p 63790:63790 --name carade-server carade
+      - name: Wait
+        run: |
+          attempt=0
+          until nc -z localhost 63790 || [ $attempt -eq 15 ]; do
+            sleep 1
+            attempt=$((attempt + 1))
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run Tests
+        env:
+          CARADE_PASSWORD: teasertopsecret
+        run: |
+          python3 ping.py
+          python3 benchmark.py
+      - name: Logs on Failure
+        if: failure()
+        run: docker logs carade-server
