@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Build & Run tests
+    name: Java CI
     runs-on: ubuntu-latest
 
     steps:
@@ -72,3 +72,24 @@ jobs:
           if [ -f server.pid ]; then
             kill $(cat server.pid)
           fi
+          
+jobs:
+  docker-test:
+    name: Docker CI
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build Docker image
+      run: docker build -t carade .
+    - name: Run Docker container
+      run: docker run -d -p 6379:6379 --name carade carade
+    - name: Wait for startup
+      run: sleep 10
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    - name: Run ping test
+      run: python ping.py
+    - name: Run benchmark
+      run: python benchmark.py
