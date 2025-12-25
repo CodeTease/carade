@@ -12,7 +12,7 @@ public class Config {
 
     public int port = 63790;
     public String password = "teasertopsecret";
-    public long maxMemory = 0; // 0 = unlimited
+    public long maxMemory = 268435456; // 256MB default
     public String maxMemoryPolicy = "noeviction"; 
     public Map<String, User> users = new HashMap<>();
 

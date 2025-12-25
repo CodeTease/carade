@@ -2,13 +2,14 @@
 
 > "Storing your bits, forgetting your bytes... but now remembering them better!"
 
-**Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Virtual Threads, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
+**Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Netty, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
 
 Part of the **CodeTease** Open-Source ecosystem.
 
+> Carade **is not** Production-Ready yet.
+
 ## Features
 
-* **Virtual Threads (Java 21+):** Handles millions of concurrent connections effortlessly.
 * **RESP Support:** Fully compatible with standard Redis clients (`redis-cli`, `redis-py`, etc.).
 * **Advanced Data Structures:**
     * **String:** Standard Key-Value with `INCR`/`DECR` support, `SETBIT`/`GETBIT`, `BITOP`, `BITCOUNT`, `BITFIELD`.

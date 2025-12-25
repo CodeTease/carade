@@ -287,26 +287,39 @@ public class Carade {
             try {
                 // --- Active Expiration (Fast Loop ~100ms) ---
                 if (db.size() > 0) {
-                    int keysToCheck = 20;
-                    int expiredCount = 0;
+                    int loopCount = 0;
                     int currentDbIndex = (int) janitorState[1];
 
-                    if (iterators[currentDbIndex] == null || !iterators[currentDbIndex].hasNext()) {
-                        iterators[currentDbIndex] = db.entrySet(currentDbIndex).iterator();
-                    }
+                    // Adaptive loop: if too many keys expire, keep cleaning (limited by loopCount)
+                    while (loopCount < 10) {
+                        int keysToCheck = 20;
+                        int expiredCount = 0;
 
-                    Iterator<Map.Entry<String, ValueEntry>> it = iterators[currentDbIndex];
-                    while (it.hasNext() && keysToCheck > 0) {
-                        Map.Entry<String, ValueEntry> entry = it.next();
-                        if (entry.getValue().isExpired()) {
-                            it.remove();
-                            if (aofHandler != null) {
-                                aofHandler.log("SELECT", String.valueOf(currentDbIndex));
-                                aofHandler.log("DEL", entry.getKey());
-                            }
-                            expiredCount++;
+                        if (iterators[currentDbIndex] == null || !iterators[currentDbIndex].hasNext()) {
+                            iterators[currentDbIndex] = db.entrySet(currentDbIndex).iterator();
                         }
-                        keysToCheck--;
+
+                        Iterator<Map.Entry<String, ValueEntry>> it = iterators[currentDbIndex];
+                        while (it.hasNext() && keysToCheck > 0) {
+                            Map.Entry<String, ValueEntry> entry = it.next();
+                            if (entry.getValue().isExpired()) {
+                                it.remove();
+                                if (aofHandler != null) {
+                                    aofHandler.log("SELECT", String.valueOf(currentDbIndex));
+                                    aofHandler.log("DEL", entry.getKey());
+                                }
+                                expiredCount++;
+                            }
+                            keysToCheck--;
+                        }
+                        
+                        // If we didn't find many expired keys, stop early
+                        // 5 is 25% of 20
+                        if (expiredCount <= 5) {
+                            break;
+                        }
+                        
+                        loopCount++;
                     }
 
                     // Update DB index for next run
@@ -525,42 +538,10 @@ public class Carade {
                      }
                      Log.info("📂 Loaded " + db.size() + " keys (Snapshot CARD).");
                  }
-            } else {
-                 loadLegacyData(); // Object stream
             }
         } catch (Exception e) {
              Log.error("⚠️ Load failed: " + e.getMessage());
              e.printStackTrace();
-        }
-    }
-    
-    private static void loadLegacyData() {
-         Log.warn("⚠️ DEPRECATED: Loading legacy Java serialized data. This is insecure and will be removed in future versions.");
-         File f = new File(DUMP_FILE);
-         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(f))) {
-            Object loaded = ois.readObject();
-            if (loaded instanceof ConcurrentHashMap) {
-                ConcurrentHashMap<?, ?> rawMap = (ConcurrentHashMap<?, ?>) loaded;
-                db.clear();
-                for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
-                    String key = (String) entry.getKey();
-                    Object val = entry.getValue();
-                    if (val instanceof String) {
-                        db.put(key, new ValueEntry(((String) val).getBytes(java.nio.charset.StandardCharsets.UTF_8), DataType.STRING, -1));
-                    } else if (val instanceof ValueEntry) {
-                        ValueEntry ve = (ValueEntry) val;
-                        if (ve.type == DataType.STRING && ve.getValue() instanceof String) {
-                            ve.setValue(((String) ve.getValue()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                        }
-                        db.put(key, ve);
-                    }
-                }
-                Log.info("📂 Loaded " + db.size() + " keys (Legacy).");
-                saveData();
-            }
-        } catch (Exception ex) {
-            Log.error("⚠️ Legacy load failed. Starting fresh.");
-            db.clear();
         }
     }
 }
