@@ -41,10 +41,9 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Project: Carade
- * Version: 0.2.0 (The "Gossip" Universe Edition)
- * Status: Alpha / Dev / Chaos / Forever
- * Author: CodeTease Team
- * "We don't bump versions, we bump features."
+ * Version: 0.3.0
+ * Status: Stable idk / Probably production / Chaos / Forever
+ * Author: CodeTease 
  */
 public class Carade {
 
@@ -234,15 +233,15 @@ public class Carade {
                 "/ /___/ /_/ / /  / /_/ / /_/ /  __/\n" +
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
-                " :: Carade ::       (v0.2.0) \n" +
-                " :: Engine ::       Netty (Powered by Java 21) \n" +
+                " :: Carade ::       (v0.3.0) \n" +
+                " :: Engine ::       Java \n" +
                 " :: Author ::       CodeTease \n");
     }
 
     private static final ClientHandler aofClient = new ClientHandler();
 
     public static void main(String[] args) throws Exception {
-        System.out.println("\n--- CARADE v0.2.0 (The 'Gossip' Universe) ---\n");
+        System.out.println("\n--- CARADE v0.3.0 ---\n");
         
         // Register Commands
         CommandRegistry.register("SET", new SetCommand());
