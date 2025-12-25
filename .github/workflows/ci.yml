@@ -30,8 +30,6 @@ jobs:
             attempt=$((attempt + 1))
           done
       - name: Run Tests
-        env:
-          CARADE_PASSWORD: teasertopsecret
         run: |
           python3 ping.py
           python3 benchmark.py
@@ -60,8 +58,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run Tests
-        env:
-          CARADE_PASSWORD: teasertopsecret
         run: |
           python3 ping.py
           python3 benchmark.py
