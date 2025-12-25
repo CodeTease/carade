@@ -74,14 +74,14 @@ You can also run Carade using Docker:
 
 ```bash
 # Pull lastest version from GHCR
-docker pull ghcr.io/codetease/carade:lastest
+docker pull ghcr.io/codetease/carade:latest
 
 # Run container (Persist data to ./data directory)
 docker run -d \
   -p 63790:63790 \
   -v $(pwd)/data:/data \
   --name carade-server \
-  ghcr.io/codetease/carade:lastest
+  ghcr.io/codetease/carade:latest
 ```
 
 ## Configuration (`carade.conf`)

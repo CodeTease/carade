@@ -4,15 +4,6 @@ import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.commands.Command;
 import core.commands.CommandRegistry;
-import core.commands.string.SetCommand;
-import core.commands.string.GetCommand;
-import core.commands.generic.DelCommand;
-import core.commands.list.LPopCommand;
-import core.commands.list.RPopCommand;
-import core.commands.hash.HSetCommand;
-import core.commands.hash.HGetCommand;
-import core.commands.scripting.EvalRoCommand;
-import core.commands.scripting.EvalShaRoCommand;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.persistence.CommandLogger;
@@ -245,17 +236,6 @@ public class Carade {
 
     public static void main(String[] args) throws Exception {
         Log.info("\n--- CARADE v0.3.0 ---\n");
-        
-        // Register Commands
-        CommandRegistry.register("SET", new SetCommand());
-        CommandRegistry.register("GET", new GetCommand());
-        CommandRegistry.register("DEL", new DelCommand());
-        CommandRegistry.register("LPOP", new LPopCommand());
-        CommandRegistry.register("RPOP", new RPopCommand());
-        CommandRegistry.register("HSET", new HSetCommand());
-        CommandRegistry.register("HGET", new HGetCommand());
-        CommandRegistry.register("EVAL_RO", new EvalRoCommand());
-        CommandRegistry.register("EVALSHA_RO", new EvalShaRoCommand());
 
         // Load Config
         config = Config.load("carade.conf");

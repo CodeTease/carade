@@ -233,6 +233,8 @@ public class CommandRegistry {
         // Scripting
         register("EVAL", new EvalCommand());
         register("EVALSHA", new EvalShaCommand());
+        register("EVAL_RO", new EvalRoCommand());
+        register("EVALSHA_RO", new EvalShaRoCommand());
         register("SCRIPT", new ScriptCommand());
 
         // GEO
