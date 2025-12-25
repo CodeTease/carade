@@ -74,6 +74,75 @@ public class JsonUtils {
         String[] parts = path.split("\\.");
         return setRecursive(root, parts, 0, newValue);
     }
+
+    /**
+     * Deletes the value at the given path.
+     * Returns 1 if deleted, 0 if not found.
+     */
+    public static long deleteByPath(JsonNode root, String path) {
+        if (root == null) return 0;
+        if (path == null || path.equals("$") || path.equals(".")) {
+             // Cannot delete root from itself via this method. 
+             // Caller should handle root deletion.
+             return 0;
+        }
+        
+        // Remove leading $. if present
+        if (path.startsWith("$.")) {
+            path = path.substring(2);
+        } else if (path.startsWith(".")) {
+            path = path.substring(1);
+        }
+        
+        String[] parts = path.split("\\.");
+        return deleteRecursive(root, parts, 0);
+    }
+
+    private static long deleteRecursive(JsonNode current, String[] parts, int index) {
+        String part = parts[index];
+        boolean isLast = index == parts.length - 1;
+
+        if (isLast) {
+            if (current.isObject()) {
+                ObjectNode obj = (ObjectNode) current;
+                if (obj.has(part)) {
+                    obj.remove(part);
+                    return 1;
+                }
+            } else if (current.isArray()) {
+                try {
+                    int idx = Integer.parseInt(part);
+                    ArrayNode arr = (ArrayNode) current;
+                    if (idx >= 0 && idx < arr.size()) {
+                        arr.remove(idx);
+                        return 1;
+                    }
+                } catch (NumberFormatException e) {
+                    return 0;
+                }
+            }
+            return 0;
+        }
+
+        // Navigation
+        JsonNode next = null;
+        if (current.isObject()) {
+            next = current.get(part);
+        } else if (current.isArray()) {
+            try {
+                int idx = Integer.parseInt(part);
+                next = current.get(idx);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        if (next != null) {
+            return deleteRecursive(next, parts, index + 1);
+        }
+
+        return 0;
+    }
     
     private static JsonNode setRecursive(JsonNode current, String[] parts, int index, JsonNode newValue) {
         String part = parts[index];
@@ -86,11 +155,6 @@ public class JsonUtils {
             } else if (current.isArray()) {
                  try {
                     int idx = Integer.parseInt(part);
-                    // Resize array if needed? For now strict update.
-                    // Actually, ArrayNode.set(index, value) throws if index is out of bounds for some versions,
-                    // or just expands. Jackson ArrayNode.set replaces or adds if index >= size?
-                    // Let's check Jackson behavior. usually set(int, JsonNode) inserts nulls if needed.
-                    // But safe way:
                     ArrayNode arr = (ArrayNode) current;
                     while (arr.size() <= idx) {
                         arr.addNull();

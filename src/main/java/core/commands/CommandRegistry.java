@@ -102,6 +102,8 @@ public class CommandRegistry {
         register("LINSERT", new LInsertCommand());
         register("LMPOP", new LmPopCommand());
         register("BLMPOP", new BlmPopCommand());
+        register("ZMPOP", new ZmPopCommand());
+        register("BZMPOP", new BzmPopCommand());
 
         // Set
         register("SPOP", new SPopCommand());
@@ -119,6 +121,7 @@ public class CommandRegistry {
         register("SINTERSTORE", new SInterStoreCommand());
         register("SUNIONSTORE", new SUnionStoreCommand());
         register("SDIFFSTORE", new SDiffStoreCommand());
+        register("SINTERCARD", new SInterCardCommand());
 
         // ZSet
         register("ZREMRANGEBYSCORE", new ZRemRangeByScoreCommand());
@@ -156,15 +159,21 @@ public class CommandRegistry {
         // Bloom
         register("BF.ADD", new BfAddCommand());
         register("BF.EXISTS", new BfExistsCommand());
+        register("BF.MADD", new BfMAddCommand());
+        register("BF.MEXISTS", new BfMExistsCommand());
         
         // T-Digest
         register("TD.ADD", new TdAddCommand());
         register("TD.QUANTILE", new TdQuantileCommand());
+        register("TD.CDF", new TdCdfCommand());
         register("TD.INFO", new TdInfoCommand());
 
         // JSON
         register("JSON.SET", new JsonSetCommand());
         register("JSON.GET", new JsonGetCommand());
+        register("JSON.DEL", new JsonDelCommand());
+        register("JSON.FORGET", new JsonDelCommand()); // Alias
+        register("JSON.TYPE", new JsonTypeCommand());
         
         // HLL
         register("PFADD", new PfAddCommand());

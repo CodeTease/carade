@@ -132,6 +132,36 @@ public class TDigest implements Serializable {
         return centroids.get(centroids.size()-1).getMean();
     }
     
+    public synchronized double cdf(double x) {
+        compress();
+        if (centroids.isEmpty()) return Double.NaN;
+        if (centroids.size() == 1) {
+            return x < centroids.get(0).getMean() ? 0.0 : 1.0; 
+        }
+        
+        if (x < centroids.get(0).getMean()) return 0.0;
+        if (x >= centroids.get(centroids.size()-1).getMean()) return 1.0;
+        
+        double weightSoFar = centroids.get(0).getCount() / 2.0;
+        
+        for (int i = 0; i < centroids.size() - 1; i++) {
+             Centroid c1 = centroids.get(i);
+             Centroid c2 = centroids.get(i+1);
+             
+             double step = (c1.getCount() / 2.0) + (c2.getCount() / 2.0);
+             
+             if (x >= c1.getMean() && x < c2.getMean()) {
+                 double fraction = (x - c1.getMean()) / (c2.getMean() - c1.getMean());
+                 double rank = weightSoFar + fraction * step;
+                 return rank / totalCount;
+             }
+             
+             weightSoFar += step;
+        }
+        
+        return 1.0;
+    }
+
     public synchronized long size() {
         return totalCount;
     }
