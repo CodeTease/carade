@@ -73,7 +73,6 @@ jobs:
             kill $(cat server.pid)
           fi
           
-jobs:
   docker-test:
     name: Docker CI
     runs-on: ubuntu-latest
