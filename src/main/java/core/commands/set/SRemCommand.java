@@ -3,7 +3,6 @@ package core.commands.set;
 import core.Carade;
 import core.commands.Command;
 import core.db.DataType;
-import core.db.ValueEntry;
 import core.network.ClientHandler;
 import java.nio.charset.StandardCharsets;
 import java.util.List;

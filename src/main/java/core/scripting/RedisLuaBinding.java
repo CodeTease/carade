@@ -19,16 +19,22 @@ import java.util.List;
 public class RedisLuaBinding extends TwoArgFunction {
 
     private final ClientHandler client;
+    private final boolean readOnly;
 
-    public RedisLuaBinding(ClientHandler client) {
+    public RedisLuaBinding(ClientHandler client, boolean readOnly) {
         this.client = client;
+        this.readOnly = readOnly;
+    }
+    
+    public RedisLuaBinding(ClientHandler client) {
+        this(client, false);
     }
 
     @Override
     public LuaValue call(LuaValue modname, LuaValue env) {
         LuaTable redis = new LuaTable();
-        redis.set("call", new RedisCall(client, false));
-        redis.set("pcall", new RedisCall(client, true));
+        redis.set("call", new RedisCall(client, false, readOnly));
+        redis.set("pcall", new RedisCall(client, true, readOnly));
         redis.set("status_reply", new StatusReply());
         redis.set("error_reply", new ErrorReply());
         // redis.set("sha1hex", new Sha1Hex()); // If needed
@@ -59,10 +65,12 @@ public class RedisLuaBinding extends TwoArgFunction {
     static class RedisCall extends VarargsFunction {
         private final ClientHandler client;
         private final boolean pcall;
+        private final boolean readOnly;
 
-        public RedisCall(ClientHandler client, boolean pcall) {
+        public RedisCall(ClientHandler client, boolean pcall, boolean readOnly) {
             this.client = client;
             this.pcall = pcall;
+            this.readOnly = readOnly;
         }
 
         @Override
@@ -78,6 +86,15 @@ public class RedisLuaBinding extends TwoArgFunction {
                 Command command = CommandRegistry.get(cmdName);
                 if (command == null) {
                     throw new RuntimeException("Unknown command '" + cmdName + "'");
+                }
+                
+                boolean isWrite = client.isWriteCommand(cmdName);
+                if (readOnly && isWrite) {
+                    throw new RuntimeException("ERR Write commands not allowed in read-only mode");
+                }
+                
+                if (!readOnly && isWrite) {
+                     ScriptManager.getInstance().setScriptDirty(true);
                 }
                 
                 // Prepare args for command execution (List<byte[]>)
@@ -98,21 +115,6 @@ public class RedisLuaBinding extends TwoArgFunction {
                 // 2. Setup capture buffer
                 ByteArrayOutputStream capture = new ByteArrayOutputStream();
                 client.setCaptureBuffer(capture);
-                
-                // 3. Execute command
-                // Note: We need to handle locking?
-                // The EVAL command itself holds the lock.
-                // If EVAL holds Write Lock, we can execute anything.
-                // If EVAL holds Read Lock (EVAL_RO/EVAL_SHA_RO - not implemented yet), we can only execute reads.
-                // Assuming EVAL holds Write Lock for now as per design.
-                // However, Command.execute calls client methods which might check locks?
-                // No, Command.execute usually just runs logic. 
-                // But some commands like SetCommand call client.executeWrite() which adds to AOF/Replication.
-                // client.executeWrite() uses WriteSequencer.
-                // WriteSequencer is thread-safe.
-                
-                // Important: We need to ensure the command doesn't write to network directly.
-                // We set captureBuffer, so client.send() writes to it.
                 
                 try {
                     command.execute(client, cmdArgs);

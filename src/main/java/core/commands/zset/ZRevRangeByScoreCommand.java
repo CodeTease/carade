@@ -2,7 +2,6 @@ package core.commands.zset;
 
 import core.commands.Command;
 import core.network.ClientHandler;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class ZRevRangeByScoreCommand implements Command {

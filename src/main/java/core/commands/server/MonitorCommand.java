@@ -4,7 +4,6 @@ import core.Carade;
 import core.commands.Command;
 import core.network.ClientHandler;
 import core.protocol.Resp;
-import java.io.IOException;
 import java.util.List;
 
 public class MonitorCommand implements Command {

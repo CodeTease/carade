@@ -5,7 +5,6 @@ import core.commands.Command;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
-import core.persistence.rdb.RdbParser;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.nio.charset.StandardCharsets;
@@ -41,16 +40,6 @@ public class RestoreCommand implements Command {
         
         final long finalTtl = ttl;
         final boolean finalReplace = replace;
-
-        Object[] logArgs = new Object[]{key, String.valueOf(ttl), "..."}; 
-        // We probably shouldn't log huge binary blob to AOF text directly, 
-        // but Carade uses text AOF. Redis uses pseudo-commands or binary safe AOF.
-        // Carade's AOF parser expects text. 
-        // If we log RESTORE, we need to log the binary payload as argument.
-        // ValueEntry stores byte[] so it's fine if AOF handler handles it.
-        // But AOF replay parses text.
-        // Our AOF uses `client.executeWrite` which logs the arguments provided.
-        // So we should pass the real binary arg.
 
         client.executeWrite(() -> {
             ValueEntry existing = Carade.db.get(client.getDbIndex(), key);

@@ -4,9 +4,7 @@ import core.commands.Command;
 import core.network.ClientHandler;
 import core.replication.ReplicationManager;
 import java.util.List;
-import core.protocol.Resp;
 import java.util.ArrayList;
-import java.nio.charset.StandardCharsets;
 
 public class RoleCommand implements Command {
     @Override

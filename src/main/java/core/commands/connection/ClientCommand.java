@@ -1,6 +1,5 @@
 package core.commands.connection;
 
-import core.Carade;
 import core.commands.Command;
 import core.network.ClientHandler;
 import java.nio.charset.StandardCharsets;

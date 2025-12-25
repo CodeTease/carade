@@ -6,7 +6,6 @@ import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;

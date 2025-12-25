@@ -3,7 +3,6 @@ package core.commands.generic;
 import core.Carade;
 import core.commands.Command;
 import core.network.ClientHandler;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;

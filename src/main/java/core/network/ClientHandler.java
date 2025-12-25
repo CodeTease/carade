@@ -5,31 +5,19 @@ import core.Config;
 import core.PubSub;
 import core.commands.Command;
 import core.commands.CommandRegistry;
-import core.db.DataType;
-import core.db.ValueEntry;
 import core.protocol.Resp;
 import core.server.WriteSequencer;
-import core.structs.CaradeZSet;
-import core.structs.ZNode;
-import core.structs.BloomFilter;
-
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSub.Subscriber {
     private ChannelHandlerContext ctx;
@@ -279,11 +267,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         WriteSequencer.getInstance().executeWrite(dbOp, serializedCmd);
     }
     
-    private String formatDouble(double d) {
-        if (d == (long) d) return String.format("%d", (long) d);
-        else return String.format("%s", d);
-    }
-
     private String mixedArrayToString(List<Object> list, int level) {
         if (list == null || list.isEmpty()) return "(empty list or set)";
         StringBuilder sb = new StringBuilder();
@@ -305,7 +288,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         return sb.toString();
     }
 
-    private boolean isWriteCommand(String cmd) {
+    public boolean isWriteCommand(String cmd) {
         return Arrays.asList("SET", "DEL", "LPUSH", "RPUSH", "LPOP", "RPOP", 
                              "HSET", "HDEL", "SADD", "SREM", "FLUSHALL", "FLUSHDB",
                              "HINCRBY", "SISMEMBER", "SCARD", 

@@ -1,85 +1,128 @@
 package core.scripting;
 
 import org.luaj.vm2.*;
-import org.luaj.vm2.lib.jse.JseBaseLib;
-import org.luaj.vm2.lib.jse.JseMathLib;
-import org.luaj.vm2.lib.PackageLib;
-import org.luaj.vm2.lib.TableLib;
-import org.luaj.vm2.lib.StringLib;
-import org.luaj.vm2.lib.DebugLib;
+import org.luaj.vm2.lib.ZeroArgFunction;
+import org.luaj.vm2.lib.jse.JsePlatform;
 import core.network.ClientHandler;
+import core.utils.Log;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class ScriptManager {
     private static final ScriptManager INSTANCE = new ScriptManager();
     private final ConcurrentHashMap<String, LuaValue> scriptCache = new ConcurrentHashMap<>();
+    private final ReentrantLock executionLock = new ReentrantLock();
     
     private final Globals globals;
+    private volatile boolean stopScript = false;
+    private volatile boolean scriptDirty = false;
 
     private ScriptManager() {
-        globals = new Globals();
-        globals.load(new JseBaseLib());
-        globals.load(new TableLib());
-        globals.load(new StringLib());
-        globals.load(new JseMathLib());
-        globals.load(new DebugLib());
-        LoadState.install(globals);
-        org.luaj.vm2.compiler.LuaC.install(globals);
+        globals = JsePlatform.debugGlobals();
     }
     
     public static ScriptManager getInstance() {
         return INSTANCE;
     }
+    
+    public void setScriptDirty(boolean dirty) {
+        this.scriptDirty = dirty;
+    }
 
-    public Object eval(ClientHandler client, String script, List<String> keys, List<String> args) {
+    public void killScript() {
+        if (!executionLock.isLocked()) {
+             throw new RuntimeException("NOTBUSY No scripts in execution right now.");
+        }
+        if (scriptDirty) {
+             throw new RuntimeException("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.");
+        }
+        stopScript = true;
+    }
+
+    public Object eval(ClientHandler client, String script, List<String> keys, List<String> args, boolean readOnly) {
         String sha = calculateSha1(script);
-        return execute(client, script, keys, args, sha);
+        return execute(client, script, keys, args, sha, readOnly);
     }
     
-    public Object evalSha(ClientHandler client, String sha, List<String> keys, List<String> args) {
+    public Object evalSha(ClientHandler client, String sha, List<String> keys, List<String> args, boolean readOnly) {
         if (!scriptCache.containsKey(sha)) {
             throw new RuntimeException("NOSCRIPT No matching script. Please use EVAL.");
         }
-        return execute(client, null, keys, args, sha);
+        return execute(client, null, keys, args, sha, readOnly);
     }
 
-    private synchronized Object execute(ClientHandler client, String script, List<String> keys, List<String> args, String sha) {
-        // Prepare KEYS and ARGV
-        LuaTable keysTable = new LuaTable();
-        for (int i = 0; i < keys.size(); i++) {
-            keysTable.set(i + 1, LuaValue.valueOf(keys.get(i)));
-        }
-        globals.set("KEYS", keysTable);
-        
-        LuaTable argvTable = new LuaTable();
-        for (int i = 0; i < args.size(); i++) {
-            argvTable.set(i + 1, LuaValue.valueOf(args.get(i)));
-        }
-        globals.set("ARGV", argvTable);
-        
-        // Register 'redis' lib with current client
-        // Since we are synchronized (and under global write lock), we can just replace the 'redis' global.
-        globals.load(new RedisLuaBinding(client)); // This sets 'redis' global
-        
-        LuaValue chunk;
-        if (scriptCache.containsKey(sha)) {
-            chunk = scriptCache.get(sha);
-        } else {
-             if (script == null) throw new RuntimeException("NOSCRIPT No matching script. Please use EVAL.");
-             // Compile
-             chunk = globals.load(script, "script");
-             scriptCache.put(sha, chunk);
-        }
-        
+    private Object execute(ClientHandler client, String script, List<String> keys, List<String> args, String sha, boolean readOnly) {
+        executionLock.lock();
         try {
-            LuaValue result = chunk.call();
-            return LuaConverter.toJava(result);
-        } catch (LuaError e) {
-            throw new RuntimeException("ERR Error running script (call to " + sha + "): " + e.getMessage());
+            stopScript = false;
+            scriptDirty = false;
+            
+            // Prepare KEYS and ARGV
+            LuaTable keysTable = new LuaTable();
+            for (int i = 0; i < keys.size(); i++) {
+                keysTable.set(i + 1, LuaValue.valueOf(keys.get(i)));
+            }
+            globals.set("KEYS", keysTable);
+            
+            LuaTable argvTable = new LuaTable();
+            for (int i = 0; i < args.size(); i++) {
+                argvTable.set(i + 1, LuaValue.valueOf(args.get(i)));
+            }
+            globals.set("ARGV", argvTable);
+            
+            // Register 'redis' lib with current client
+            globals.load(new RedisLuaBinding(client, readOnly)); // This sets 'redis' global
+            
+            // Install instruction hook for SCRIPT KILL
+            try {
+                globals.get("debug").get("sethook").call(
+                    new ZeroArgFunction() {
+                        @Override
+                        public LuaValue call() {
+                            if (stopScript) {
+                                throw new LuaError("Script killed by user with SCRIPT KILL...");
+                            }
+                            return NIL;
+                        }
+                    },
+                    LuaValue.valueOf(""), // line hook
+                    LuaValue.valueOf(1000) // check every 1000 instructions
+                );
+            } catch (Exception e) {
+                Log.error("ScriptManager: Failed to set hook: " + e.getMessage());
+            }
+            
+            LuaValue chunk;
+            if (scriptCache.containsKey(sha)) {
+                chunk = scriptCache.get(sha);
+            } else {
+                 if (script == null) throw new RuntimeException("NOSCRIPT No matching script. Please use EVAL.");
+                 // Compile
+                 chunk = globals.load(script, "script");
+                 scriptCache.put(sha, chunk);
+            }
+            
+            try {
+                LuaValue result = chunk.call();
+                return LuaConverter.toJava(result);
+            } catch (LuaError e) {
+                // Check if it was our kill signal
+                if (e.getMessage().contains("Script killed by user")) {
+                    throw new RuntimeException("ERR Script killed by user with SCRIPT KILL...");
+                }
+                throw new RuntimeException("ERR Error running script (call to " + sha + "): " + e.getMessage());
+            } finally {
+                // Uninstall hook
+                try {
+                    globals.get("debug").get("sethook").call();
+                } catch (Exception e) {}
+            }
+        } finally {
+            executionLock.unlock();
         }
     }
     

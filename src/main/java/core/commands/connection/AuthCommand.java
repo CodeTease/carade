@@ -4,7 +4,6 @@ import core.Carade;
 import core.Config;
 import core.commands.Command;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 

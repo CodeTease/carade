@@ -4,7 +4,6 @@ import core.commands.Command;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import core.Carade;
 import core.structs.HyperLogLog;
 import java.util.List;

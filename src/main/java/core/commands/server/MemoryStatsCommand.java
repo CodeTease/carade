@@ -3,7 +3,6 @@ package core.commands.server;
 import core.Carade;
 import core.commands.Command;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;

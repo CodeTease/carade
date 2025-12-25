@@ -5,7 +5,6 @@ import core.commands.Command;
 import core.db.DataType;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;

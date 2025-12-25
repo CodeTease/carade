@@ -8,13 +8,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-public class EvalCommand implements Command {
+public class EvalRoCommand implements Command {
     @Override
     public void execute(ClientHandler client, List<byte[]> args) {
-        System.out.println("DEBUG: EvalCommand executed");
-        // EVAL script numkeys key [key ...] arg [arg ...]
+        // EVAL_RO script numkeys key [key ...] arg [arg ...]
         if (args.size() < 3) {
-            client.sendError("ERR wrong number of arguments for 'eval' command");
+            client.sendError("ERR wrong number of arguments for 'eval_ro' command");
             return;
         }
 
@@ -34,7 +33,7 @@ public class EvalCommand implements Command {
         }
         
         if (args.size() < 3 + numKeys) {
-            client.sendError("ERR wrong number of arguments for 'eval' command");
+            client.sendError("ERR wrong number of arguments for 'eval_ro' command");
             return;
         }
 
@@ -49,17 +48,15 @@ public class EvalCommand implements Command {
         }
 
         try {
-            System.out.println("DEBUG: Calling ScriptManager.eval");
-            Object result = ScriptManager.getInstance().eval(client, script, keys, scriptArgs, false);
-            System.out.println("DEBUG: ScriptManager.eval returned " + result);
+            Object result = ScriptManager.getInstance().eval(client, script, keys, scriptArgs, true); // readOnly=true
             if (result == null) {
                 client.sendNull();
             } else if (result instanceof Long) {
                 client.sendInteger((Long) result);
             } else if (result instanceof byte[]) {
                 client.send(true, Resp.bulkString((byte[]) result), null);
-            } else if (result instanceof String) { 
-                client.sendSimpleString((String) result); 
+            } else if (result instanceof String) {
+                client.sendSimpleString((String) result);
             } else if (result instanceof List) {
                 client.sendMixedArray((List<Object>) result);
             } else if (result instanceof core.scripting.RespParser.RespError) {
@@ -67,9 +64,7 @@ public class EvalCommand implements Command {
             } else {
                 client.sendError("ERR Unknown result type from script");
             }
-        } catch (Throwable e) {
-            System.out.println("DEBUG: Error in EvalCommand: " + e);
-            e.printStackTrace();
+        } catch (Exception e) {
             client.sendError(e.getMessage());
         }
     }

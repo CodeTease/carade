@@ -48,7 +48,7 @@ public class EvalShaCommand implements Command {
         }
 
         try {
-            Object result = ScriptManager.getInstance().evalSha(client, sha1, keys, scriptArgs);
+            Object result = ScriptManager.getInstance().evalSha(client, sha1, keys, scriptArgs, false);
             if (result == null) {
                 client.sendNull();
             } else if (result instanceof Long) {

@@ -3,7 +3,6 @@ package core.commands.zset;
 import core.Carade;
 import core.commands.Command;
 import core.db.DataType;
-import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.structs.CaradeZSet;
 import core.structs.ZNode;

@@ -10,7 +10,6 @@ public class ReplicationBacklog {
     private final byte[] buffer;
     private final int size;
     private final AtomicLong globalOffset = new AtomicLong(0);
-    private long bufferStartOffset = 0; // The global offset corresponding to buffer[0]
     private int writeIndex = 0;
 
     public ReplicationBacklog(int sizeInBytes) {

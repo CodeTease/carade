@@ -3,18 +3,13 @@ package core.protocol.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
-import core.protocol.Resp; // Reuse existing Resp constants if needed, or implement fresh
-
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /**
  * Encodes Java Objects (Strings, Integers, Lists, byte[]) into RESP format.
  */
 public class NettyRespEncoder extends MessageToByteEncoder<Object> {
     
-    private static final byte[] CRLF = "\r\n".getBytes(StandardCharsets.UTF_8);
-
     @Override
     protected void encode(ChannelHandlerContext ctx, Object msg, ByteBuf out) throws Exception {
         if (msg instanceof ByteBuf) {

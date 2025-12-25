@@ -3,7 +3,6 @@ package core.commands.scripting;
 import core.commands.Command;
 import core.network.ClientHandler;
 import core.scripting.ScriptManager;
-import core.protocol.Resp;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -45,6 +44,15 @@ public class ScriptCommand implements Command {
             case "FLUSH":
                 ScriptManager.getInstance().flush();
                 client.sendSimpleString("OK");
+                break;
+
+            case "KILL":
+                try {
+                    ScriptManager.getInstance().killScript();
+                    client.sendSimpleString("OK");
+                } catch (Exception e) {
+                    client.sendError("ERR " + e.getMessage());
+                }
                 break;
                 
             default:

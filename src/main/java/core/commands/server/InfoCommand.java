@@ -3,9 +3,7 @@ package core.commands.server;
 import core.Carade;
 import core.commands.Command;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import java.lang.management.ManagementFactory;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class InfoCommand implements Command {

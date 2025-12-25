@@ -1,7 +1,6 @@
 package core.structs;
 
 import java.io.Serializable;
-import java.util.Arrays;
 
 /**
  * A simple HyperLogLog implementation.
@@ -48,38 +47,6 @@ public class HyperLogLog implements Serializable {
     public boolean add(long hash) {
         // First P bits for index
         int idx = (int) (hash >>> (64 - P));
-        
-        // Remaining 64 - P bits for run length of zeros
-        // We look at the lower (64-P) bits. 
-        // We want number of leading zeros in the remaining 50 bits + 1.
-        // Long.numberOfLeadingZeros counts from high end.
-        // So we mask out the index bits, shift up, count zeros.
-        
-        // Actually, standard HLL uses "number of leading zeros in the (w-p) bits".
-        // Let's take the remaining bits:
-        long w = hash << P; // Shift out the index bits
-        // Now count leading zeros.
-        // If w is 0, rank is 64-P + 1 (technically max possible).
-        int rank = Long.numberOfLeadingZeros(w) - (P - 1); 
-        // Wait, standard HLL usually:
-        // x = hash(v)
-        // j = x < 0..p-1 >
-        // w = x < p..63 >
-        // rho = 1 + lead_zeros(w)
-        
-        // In Java Long.numberOfLeadingZeros(x) returns 0..64.
-        // If we shift left by P, we cleared top P bits.
-        // But leading zeros will include those cleared bits? No, left shift pads with 0 at right, 
-        // but high bits are discarded. 
-        // Example: P=14. 
-        // Hash = [14 bits index] [50 bits value]
-        // hash << 14 moves [50 bits value] to top. Bottom 14 are 0.
-        // numberOfLeadingZeros will count zeros at top of these 50 bits.
-        // If all 50 bits are 0, nlz returns 64? No.
-        // If hash << 14 is 0, then all 50 bits were 0. nlz = 64.
-        // The max rank we care about is ~50.
-        // If w=0, let's say rank is (64-P) + 1.
-        
         int zeros = Long.numberOfLeadingZeros(hash << P);
         int rho = zeros + 1;
         

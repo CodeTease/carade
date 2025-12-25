@@ -102,9 +102,6 @@ public class RdbParser {
         // Simple ziplist parser
         // <zlbytes><zltail><zllen><entry>...<zlend>
         ByteBuffer bb = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN);
-        int zlbytes = bb.getInt();
-        int zltail = bb.getInt();
-        int zllen = bb.getShort() & 0xFFFF;
         
         List<String> entries = new ArrayList<>();
         int pos = 10; // 4+4+2
@@ -113,13 +110,8 @@ public class RdbParser {
             int b = blob[pos++] & 0xFF;
             if (b == 0xFF) break; // zlend
             
-            // prev len
-            int prevLen;
             if (b < 254) {
-                prevLen = b;
             } else {
-                // 254 means next 4 bytes
-                prevLen = bb.getInt(pos); // Read 4 bytes at pos
                 pos += 4;
             }
             

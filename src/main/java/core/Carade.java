@@ -11,6 +11,8 @@ import core.commands.list.LPopCommand;
 import core.commands.list.RPopCommand;
 import core.commands.hash.HSetCommand;
 import core.commands.hash.HGetCommand;
+import core.commands.scripting.EvalRoCommand;
+import core.commands.scripting.EvalShaRoCommand;
 import core.db.ValueEntry;
 import core.network.ClientHandler;
 import core.persistence.CommandLogger;
@@ -30,7 +32,6 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 
 import java.io.*;
-import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -253,6 +254,8 @@ public class Carade {
         CommandRegistry.register("RPOP", new RPopCommand());
         CommandRegistry.register("HSET", new HSetCommand());
         CommandRegistry.register("HGET", new HGetCommand());
+        CommandRegistry.register("EVAL_RO", new EvalRoCommand());
+        CommandRegistry.register("EVALSHA_RO", new EvalShaRoCommand());
 
         // Load Config
         config = Config.load("carade.conf");
@@ -444,12 +447,6 @@ public class Carade {
         } finally {
             isSaving.set(false);
         }
-    }
-    
-    private static void writeString(DataOutputStream dos, String s) throws IOException {
-        byte[] bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        dos.writeInt(bytes.length);
-        dos.write(bytes);
     }
     
     private static String readString(DataInputStream dis) throws IOException {

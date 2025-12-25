@@ -9,7 +9,6 @@ import core.persistence.rdb.RdbEncoder;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.List;
 
 public class DumpCommand implements Command {

@@ -20,8 +20,6 @@ import core.commands.scripting.*;
 
 import java.util.HashMap;
 import java.util.Map;
-import core.network.ClientHandler;
-import java.util.List;
 
 public class CommandRegistry {
     private static final Map<String, Command> commands = new HashMap<>();

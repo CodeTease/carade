@@ -27,7 +27,6 @@ public class MigrateCommand implements Command {
             String host = new String(args.get(1), StandardCharsets.UTF_8);
             int port = Integer.parseInt(new String(args.get(2), StandardCharsets.UTF_8));
             String key = new String(args.get(3), StandardCharsets.UTF_8);
-            int destDb = Integer.parseInt(new String(args.get(4), StandardCharsets.UTF_8));
             int timeout = Integer.parseInt(new String(args.get(5), StandardCharsets.UTF_8));
             
             boolean copy = false;
@@ -86,25 +85,6 @@ public class MigrateCommand implements Command {
                 out.write(Resp.array(cmdParts));
                 out.flush();
                 
-                // Read response
-                Resp.Request response = Resp.parse(in); // Wait, response is simple string usually
-                // Resp.parse parses requests. We need to parse response.
-                // But Resp class handles parsing stream.
-                // Actually Resp.parse returns Request object.
-                // Response from server is SimpleString, Error, etc.
-                // Resp.parse might fail if it expects Array of BulkStrings (Request).
-                // Simple Strings are "+OK\r\n".
-                // Resp.parse logic:
-                // It reads byte. If '*', array.
-                // If '+', simple string?
-                // We should implement a basic response reader or reuse one if available.
-                // Resp class seems server-side focused.
-                // I'll implement a simple read line logic here.
-                
-                // Simple helper to read line
-                // ...
-                // For now, assuming OK.
-                // Let's blindly assume success if no exception for minimal impl, or try to read byte.
                 int b = in.read();
                 if (b == '-') { // Error
                     client.sendError("ERR Target instance returned error");
