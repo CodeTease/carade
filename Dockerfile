@@ -1,25 +1,15 @@
 # Stage 1: Build
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
 
-WORKDIR /src
-COPY core/ core/
-RUN javac core/*.java
-
-# Stage 2: Runtime
-FROM eclipse-temurin:21-jre-alpine
-
-# Create data directory
-WORKDIR /data
-
-# Copy compiled classes to a separate code directory
-COPY --from=builder /src/core /app/core
-
-# Expose default port
+# Stage 2: Run
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /app/target/carade-*.jar app.jar
 EXPOSE 63790
-
-# Persistence volume
 VOLUME /data
-
-# Run from /data so that carade.dump/aof/conf are stored/read from the volume
-# Classpath points to the code directory
-CMD ["java", "-cp", "/app", "core.Carade"]
+WORKDIR /data
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
