@@ -20,14 +20,18 @@ import core.commands.scripting.*;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Arrays;
+import java.util.Collections;
 
 public class CommandRegistry {
-    private static final Map<String, Command> commands = new HashMap<>();
+    private static final Map<String, CommandContainer> commands = new HashMap<>();
 
     static {
         // String
-        register("GET", new GetCommand());
-        register("SET", new SetCommand());
+        register("GET", new GetCommand(), new CommandMetadata(2, Set.of("readonly", "fast"), 1, 1, 1));
+        register("SET", new SetCommand(), new CommandMetadata(-3, Set.of("write", "denyoom"), 1, 1, 1));
         register("SETNX", new SetNxCommand());
         register("INCR", new IncrCommand());
         register("DECR", new DecrCommand());
@@ -281,14 +285,24 @@ public class CommandRegistry {
     }
 
     public static void register(String name, Command command) {
-        commands.put(name, command);
+        // Default metadata: arity -1, no flags, no keys
+        register(name, command, new CommandMetadata(-1, Collections.emptySet(), 0, 0, 0));
+    }
+
+    public static void register(String name, Command command, CommandMetadata metadata) {
+        commands.put(name, new CommandContainer(command, metadata));
     }
 
     public static Command getCommand(String name) {
-        return commands.get(name);
+        CommandContainer container = commands.get(name);
+        return container != null ? container.getCommand() : null;
     }
     
     public static Command get(String name) {
-        return commands.get(name);
+        return getCommand(name);
+    }
+
+    public static Map<String, CommandContainer> getAll() {
+        return Collections.unmodifiableMap(commands);
     }
 }
