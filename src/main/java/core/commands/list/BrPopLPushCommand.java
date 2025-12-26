@@ -69,7 +69,7 @@ public class BrPopLPushCommand implements Command {
             if (!served) {
                 // Async blocking
                 // Note: BlockingRequest in Carade.java handles targetKey (push logic)
-                Carade.BlockingRequest bReq = new Carade.BlockingRequest(false, destKey, client.getDbIndex());
+                Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, false, destKey, client.getDbIndex());
                 Carade.blockingRegistry.computeIfAbsent(source, x -> new ConcurrentLinkedQueue<>()).add(bReq);
                 
                 bReq.future.whenComplete((result, ex) -> {

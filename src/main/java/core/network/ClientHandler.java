@@ -100,6 +100,7 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         Carade.pubSub.unsubscribeAll(this);
         core.replication.ReplicationManager.getInstance().removeReplica(this);
         Carade.monitors.remove(this);
+        Carade.removeBlockingRequests(this);
         unwatchAll();
         Carade.activeConnections.decrementAndGet();
         Carade.connectedClients.remove(this);

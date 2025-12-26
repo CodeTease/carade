@@ -98,12 +98,14 @@ public class Carade {
         public final String targetKey; // For BRPOPLPUSH
         public final int dbIndex;
         public final DataType expectedType;
+        public final ClientHandler client;
         
-        public BlockingRequest(boolean isLeft, int dbIndex) { this(isLeft, null, dbIndex, DataType.LIST); }
-        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex) { this(isLeft, targetKey, dbIndex, DataType.LIST); }
-        public BlockingRequest(boolean isLeft, int dbIndex, DataType type) { this(isLeft, null, dbIndex, type); }
+        public BlockingRequest(ClientHandler client, boolean isLeft, int dbIndex) { this(client, isLeft, null, dbIndex, DataType.LIST); }
+        public BlockingRequest(ClientHandler client, boolean isLeft, String targetKey, int dbIndex) { this(client, isLeft, targetKey, dbIndex, DataType.LIST); }
+        public BlockingRequest(ClientHandler client, boolean isLeft, int dbIndex, DataType type) { this(client, isLeft, null, dbIndex, type); }
         
-        public BlockingRequest(boolean isLeft, String targetKey, int dbIndex, DataType type) { 
+        public BlockingRequest(ClientHandler client, boolean isLeft, String targetKey, int dbIndex, DataType type) { 
+            this.client = client;
             this.isLeft = isLeft; 
             this.targetKey = targetKey;
             this.dbIndex = dbIndex;
@@ -111,6 +113,14 @@ public class Carade {
         }
     }
     public static final ConcurrentHashMap<String, ConcurrentLinkedQueue<BlockingRequest>> blockingRegistry = new ConcurrentHashMap<>();
+
+    public static void removeBlockingRequests(ClientHandler client) {
+        blockingRegistry.values().forEach(queue -> {
+            queue.removeIf(req -> req.client == client);
+        });
+        // Optional: Remove empty queues to save memory
+        blockingRegistry.entrySet().removeIf(e -> e.getValue().isEmpty());
+    }
 
     public static void checkBlockers(String key) {
         ConcurrentLinkedQueue<BlockingRequest> q = blockingRegistry.get(key);
@@ -420,10 +430,12 @@ public class Carade {
 
     public static volatile long lastSaveTime = System.currentTimeMillis() / 1000;
     public static final AtomicBoolean isSaving = new AtomicBoolean(false);
+    public static volatile boolean shutdownInitiated = false;
 
     public static void saveData() {
         if (!isSaving.compareAndSet(false, true)) {
-             throw new RuntimeException("Background save already in progress");
+             Log.warn("Background save already in progress, skipping.");
+             return;
         }
         try {
             new RdbEncoder().save(db, DUMP_FILE);

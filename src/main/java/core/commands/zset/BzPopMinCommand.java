@@ -79,7 +79,7 @@ public class BzPopMinCommand implements Command {
 
         if (!served) {
             // Block
-            Carade.BlockingRequest req = new Carade.BlockingRequest(true, client.getDbIndex(), DataType.ZSET);
+            Carade.BlockingRequest req = new Carade.BlockingRequest(client, true, client.getDbIndex(), DataType.ZSET);
             for (String k : keys) {
                 Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(req);
             }

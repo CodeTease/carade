@@ -15,6 +15,8 @@ public class ShutdownCommand implements Command {
             if (arg.equals("NOSAVE")) save = false;
         }
         
+        Carade.shutdownInitiated = true;
+
         if (save) {
             Carade.saveData();
         }

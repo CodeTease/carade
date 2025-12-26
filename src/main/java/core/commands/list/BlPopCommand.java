@@ -60,7 +60,7 @@ public class BlPopCommand implements Command {
             }
             
             if (!served) {
-                Carade.BlockingRequest bReq = new Carade.BlockingRequest(true, null, client.getDbIndex());
+                Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, true, null, client.getDbIndex());
                 for (String k : keys) {
                     Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
                 }

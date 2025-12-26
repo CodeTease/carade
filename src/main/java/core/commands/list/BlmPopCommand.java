@@ -102,7 +102,7 @@ public class BlmPopCommand implements Command {
             }
             
             // 2. Block
-            Carade.BlockingRequest bReq = new Carade.BlockingRequest(isLeft, null, client.getDbIndex());
+            Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, isLeft, null, client.getDbIndex());
             for (String k : keys) {
                 Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
             }

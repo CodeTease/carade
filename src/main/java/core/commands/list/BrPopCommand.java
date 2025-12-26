@@ -61,7 +61,7 @@ public class BrPopCommand implements Command {
             
             if (!served) {
                 // False means BRPOP (pop from tail)
-                Carade.BlockingRequest bReq = new Carade.BlockingRequest(false, null, client.getDbIndex());
+                Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, false, null, client.getDbIndex());
                 for (String k : keys) {
                     Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
                 }

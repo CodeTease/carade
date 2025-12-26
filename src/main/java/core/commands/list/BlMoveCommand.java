@@ -90,7 +90,7 @@ public class BlMoveCommand implements Command {
                 // "The logic in Carade.checkBlockers() actually performs the POP and PUSH if targetKey is set."
                 // I checked `BlockingRequest` constructor in `BrPopLPushCommand`.
                 
-                Carade.BlockingRequest bReq = new Carade.BlockingRequest(popFromLeft, destKey, client.getDbIndex());
+                Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, popFromLeft, destKey, client.getDbIndex());
                 Carade.blockingRegistry.computeIfAbsent(source, x -> new ConcurrentLinkedQueue<>()).add(bReq);
                 
                 bReq.future.whenComplete((result, ex) -> {

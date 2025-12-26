@@ -118,7 +118,7 @@ public class BzmPopCommand implements Command {
             // We need to adapt the result format.
             // BZMPOP expects [key, [[member, score], ...]]
             
-            Carade.BlockingRequest bReq = new Carade.BlockingRequest(isMin, client.getDbIndex(), DataType.ZSET);
+            Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, isMin, client.getDbIndex(), DataType.ZSET);
             for (String k : keys) {
                 Carade.blockingRegistry.computeIfAbsent(k, x -> new ConcurrentLinkedQueue<>()).add(bReq);
             }
