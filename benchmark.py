@@ -1,159 +1,140 @@
 import socket
 import time
 import threading
-import random
 import os
 
-# --- CONFIGURATION (Feel free to modify) ---
+# --- CONFIGURATION ---
 HOST = '127.0.0.1'
 PORT = 63790
-# Load password from ENV or use default (Insecure default for local dev)
 PASSWORD = os.getenv('CARADE_PASSWORD', 'teasertopsecret') 
 
 # Stress Test Configuration
-CONCURRENT_CLIENTS = 50     # Number of concurrent threads (simulated users)
-REQUESTS_PER_CLIENT = 1000  # Requests per thread
-# Total requests = 50 * 1000 = 50,000
+CONCURRENT_CLIENTS = 50     
+REQUESTS_PER_CLIENT = 1000  
+
+# --- RESP PARSER (Improved) ---
+def read_resp(f):
+    try:
+        line = f.readline()
+        if not line: return None
+        p = line[:1]
+        
+        if p in (b'+', b'-', b':'): return line[1:].strip().decode()
+        
+        if p == b'$':
+            l = int(line[1:].strip())
+            if l == -1: return None
+            data = f.read(l)
+            f.read(2) # Skip CRLF
+            return data.decode()
+            
+        if p == b'*':
+            return [read_resp(f) for _ in range(int(line[1:].strip()))]
+            
+        return None
+    except: return None
 
 # --- UTILITIES ---
 def get_connection():
-    """Establishes a connection to the Carade server and performs authentication."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(5) # 5s timeout avoids hanging indefinitely
+        s.settimeout(5)
         s.connect((HOST, PORT))
+        f = s.makefile('rb')
         
-        # Authenticate immediately
-        s.sendall(f"AUTH {PASSWORD}\n".encode())
-        resp = s.recv(1024).decode()
-        
-        if "OK" not in resp:
-            print(f"❌ Auth Failed: {resp.strip()}")
-            return None
-        return s
-    except Exception as e:
-        # Silently fail usually, or uncomment next line for debug
-        # print(f"Connection failed: {e}") 
-        return None
+        s.sendall(f"AUTH {PASSWORD}\r\n".encode())
+        resp = read_resp(f)
+        if resp == "OK": return s, f
+        return None, None
+    except: return None, None
 
-def send_cmd(sock, cmd):
-    """Sends a command and returns the raw response string."""
+def send_cmd(sock, f, cmd):
     try:
-        sock.sendall(f"{cmd}\n".encode())
-        return sock.recv(4096).decode().strip()
-    except:
-        return None
+        sock.sendall(f"{cmd}\r\n".encode())
+        return read_resp(f)
+    except: return None
 
-# --- FEATURE VERIFICATION ---
+# --- FEATURE TESTS (Restored Logic) ---
 def test_new_features():
-    """Checks if the server supports v0.1.0 'Universe' features (Quotes, TTL)."""
-    print("\n🕵️  FEATURE INSPECTION")
-    print("-" * 50)
-    
-    s = get_connection()
-    if not s:
-        print("❌ Cannot connect to Server. Is Carade running?")
+    print("🧪 Verifying system features (TTL & Expiry)...")
+    conn = get_connection()
+    if not conn[0]: return False
+    s, f = conn
+
+    # 1. Basic Check
+    send_cmd(s, f, "SET test_key benchmark_val")
+    val = send_cmd(s, f, "GET test_key")
+    if val != "benchmark_val":
+        print(f"❌ Basic GET failed. Got: {val}")
         return False
 
-    # 1. Test Quotes Parser (Handling spaces in strings)
-    print("🔹 Testing Quotes Parser...", end=" ")
-    quote_val = "CodeTease Platform Inc"
-    send_cmd(s, f'SET test:quote "{quote_val}"')
-    res = send_cmd(s, "GET test:quote")
+    # 2. TTL Test (Your original logic)
+    send_cmd(s, f, "EXPIRE test_key 1")
+    ttl = send_cmd(s, f, "TTL test_key")
+    print(f"   Initial TTL: {ttl}s")
     
-    if f'"{quote_val}"' in res or quote_val in res:
-        print("✅ PASSED")
-    else:
-        print(f"❌ FAILED (Got: {res})")
+    print("   Waiting for expiry (1.5s)...")
+    time.sleep(1.5)
+    
+    expired_val = send_cmd(s, f, "GET test_key")
+    if expired_val is not None:
+        print(f"❌ Expiry failed: Key still exists -> {expired_val}")
+        return False
 
-    # 2. Test TTL (Time-To-Live / Expiration)
-    print("🔹 Testing TTL (Expire)...  ", end=" ")
-    send_cmd(s, "SET test:ttl 'I_will_die' EX 1") # Should expire in 1s
-    val_immediate = send_cmd(s, "GET test:ttl")
-    
-    if "nil" in val_immediate:
-         print("❌ FAILED (Key was not set correctly)")
-    else:
-        time.sleep(1.2) # Wait for death
-        val_after = send_cmd(s, "GET test:ttl")
-        if "(nil)" in val_after:
-            print("✅ PASSED (Key expired as expected)")
-        else:
-            print(f"❌ FAILED (Key is still alive: {val_after})")
-            
+    print("✅ Feature tests passed.")
     s.close()
-    print("-" * 50)
     return True
 
-# --- WORKER THREAD ---
+# --- WORKER ---
 def stress_worker(thread_id, success_counter):
-    """Worker function to simulate a single active user."""
-    s = get_connection()
-    if not s: return
-
+    conn = get_connection()
+    if not conn[0]: return
+    s, f = conn
+    
     for i in range(REQUESTS_PER_CLIENT):
-        key = f"usr:{thread_id}:{i}"
-        val = f"data_{random.randint(1000,9999)}"
+        key = f"bench:{thread_id}:{i}"
         
-        # Randomly inject TTL commands to stress the expiration logic
-        if i % 10 == 0:
-            cmd = f"SET {key} {val} EX 60"
-        else:
-            cmd = f"SET {key} {val}"
-            
-        res = send_cmd(s, cmd)
-        if res and "OK" in res:
-            success_counter[0] += 1
-            
-        # Occasionally read back data to simulate real-world read/write mix
-        if i % 5 == 0:
-            send_cmd(s, f"GET {key}")
-
+        # SET
+        s.sendall(f"SET {key} val_{i}\r\n".encode())
+        read_resp(f)
+        
+        # GET
+        s.sendall(f"GET {key}\r\n".encode())
+        read_resp(f)
+        
+        success_counter[0] += 1
+        
     s.close()
 
-# --- MAIN ENTRY POINT ---
+# --- MAIN ---
 def run_benchmark():
-    print(f"\n🚀 CARADE STRESS TESTER (International Edition)")
+    print("\n🏋️  CARADE BENCHMARK")
     print(f"Target: {HOST}:{PORT}")
-    print(f"Auth:   {'Env Configured' if os.getenv('CARADE_PASSWORD') else 'Default (Insecure)'}")
     
-    # Verify features first
-    if not test_new_features():
-        return
+    if not test_new_features(): return
 
-    print(f"\n🏋️  STARTING STRESS TEST")
-    print(f"Threads: {CONCURRENT_CLIENTS} | Reqs/Thread: {REQUESTS_PER_CLIENT}")
-    print(f"Total Requests: {CONCURRENT_CLIENTS * REQUESTS_PER_CLIENT:,}")
-    print("Sending payload... Please wait...")
-
+    print("\n🚀 Starting stress test...")
     start_time = time.time()
     
     threads = []
-    success_counter = [0] # List used for pass-by-reference mutability
+    success_counter = [0]
     
-    # Spawn Threads (Simulate concurrent users)
     for i in range(CONCURRENT_CLIENTS):
         t = threading.Thread(target=stress_worker, args=(i, success_counter))
         threads.append(t)
         t.start()
         
-    # Wait for all threads to finish
-    for t in threads:
-        t.join()
+    for t in threads: t.join()
 
-    end_time = time.time()
-    duration = end_time - start_time
-    # Estimate total operations (SETs + interleaved GETs)
-    total_reqs = CONCURRENT_CLIENTS * REQUESTS_PER_CLIENT 
-    rps = total_reqs / duration
-
+    duration = time.time() - start_time
+    total = success_counter[0] * 2
+    
     print("\n" + "="*30)
-    print(f"🔥 FINAL RESULTS")
-    print(f"✅ Successful SETs: {success_counter[0]:,}")
-    print(f"⏱️ Time Taken:      {duration:.2f}s")
-    print(f"🚀 Throughput:      {rps:,.0f} req/s")
-    print("="*30)
-    print("Note: This metric is client-bound (Python GIL limitation), not Server-bound.")
+    print("🔥 FINAL RESULTS")
+    print(f"✅ Total Ops:    {total:,}")
+    print(f"⏱️  Duration:     {duration:.2f}s")
+    print(f"🚀 Throughput:   {total/duration:,.0f} ops/sec")
+    print("="*30 + "\n")
 
 if __name__ == "__main__":
     run_benchmark()

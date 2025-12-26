@@ -28,6 +28,9 @@ replay_pid*
 *.aof
 venv
 __pycache__
+target
+.vscode
+dependency-reduced-pom.xml
 
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 

@@ -2,21 +2,26 @@
 
 > "Storing your bits, forgetting your bytes... but now remembering them better!"
 
-**Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Virtual Threads, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
+**Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Netty, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
 
 Part of the **CodeTease** Open-Source ecosystem.
 
+> Carade **is not** Production-Ready yet.
+
 ## Features
 
-* **Virtual Threads (Java 21+):** Handles millions of concurrent connections effortlessly.
 * **RESP Support:** Fully compatible with standard Redis clients (`redis-cli`, `redis-py`, etc.).
 * **Advanced Data Structures:**
-    * **String:** Standard Key-Value with `INCR`/`DECR` support, `SETBIT`/`GETBIT`.
+    * **String:** Standard Key-Value with `INCR`/`DECR` support, `SETBIT`/`GETBIT`, `BITOP`, `BITCOUNT`, `BITFIELD`.
     * **List:** `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LTRIM`, `RPOPLPUSH`, and blocking `BLPOP`/`BRPOP`.
     * **Hash:** `HSET`, `HGET`, `HGETALL`, `HDEL`, `HINCRBY`.
     * **Set:** `SADD`, `SMEMBERS`, `SREM`, `SINTER`, `SUNION`, `SDIFF`.
     * **Sorted Set:** `ZADD`, `ZRANGE`, `ZREVRANGE`, `ZREM`, `ZRANK`, `ZSCORE`, `ZCARD`, `ZCOUNT`.
     * **Geospatial:** `GEOADD`, `GEODIST`, `GEORADIUS` (Store and query coordinates).
+    * **JSON:** `JSON.SET`, `JSON.GET`, `JSON.DEL` (Native JSON manipulation).
+    * **Probabilistic:** `PFADD`/`PFCOUNT` (HyperLogLog), `BF.ADD` (Bloom Filters), T-Digest.
+* **Scripting:**
+    * **Lua:** Full support for `EVAL` and `EVALSHA`.
 * **Persistence:**
     * **RDB Snapshots:** Periodic binary dumps (`carade.dump`) compatible with Redis format.
     * **AOF (Append-Only File):** Logs every write operation (`carade.aof`) for maximum durability and replay on startup.
@@ -39,29 +44,26 @@ Part of the **CodeTease** Open-Source ecosystem.
 
 ## Roadmap & Missing Features
 
-While Carade aims for high compatibility, the following features are currently **missing** in v0.2.0 compared to standard Redis:
+While Carade aims for high compatibility, the following features are currently **missing** in v0.3.0 compared to standard Redis:
 
-* **Lua Scripting:** No support for `EVAL` or `EVALSHA`.
 * **Redis Cluster:** No native clustering or sharding support.
 * **Streams:** No support for Stream data type (`XADD`, `XREAD`, etc.).
 * **Modules:** No module system support.
-* **Advanced Bit Operations:** Missing `BITOP`, `BITCOUNT`, `BITFIELD`.
-* **HyperLogLog:** Missing `PFADD`, `PFCOUNT`.
 * **ACL Command:** Full `ACL` command management is not implemented (use `carade.conf` for user management).
 
 ## Installation & Usage
 
-**Prerequisites:** JDK 21+.
+**Prerequisites:** JDK 21+ and Maven.
 
 1. **Build**
 ```bash
-javac core/*.java
+mvn clean package
 ```
 
 2. **Run**
 ```bash
-# Run with default config or carade.conf if present
-java -cp . core.Carade
+# Run the jar
+java -jar target/carade-0.3.0.jar
 ```
 
 The server listens on port **63790** (default).
@@ -71,15 +73,15 @@ The server listens on port **63790** (default).
 You can also run Carade using Docker:
 
 ```bash
-# Pull version 0.2.0 from GHCR
-docker pull ghcr.io/codetease/carade:0.2.0
+# Pull lastest version from GHCR
+docker pull ghcr.io/codetease/carade:latest
 
 # Run container (Persist data to ./data directory)
 docker run -d \
   -p 63790:63790 \
   -v $(pwd)/data:/data \
   --name carade-server \
-  ghcr.io/codetease/carade:0.2.0
+  ghcr.io/codetease/carade:latest
 ```
 
 ## Configuration (`carade.conf`)
@@ -109,6 +111,8 @@ Connect via `redis-cli -p 63790` or `telnet`.
 * **Set:** `SADD`, `SMEMBERS`, `SREM`, `SINTER`, `SUNION`, `SDIFF`, `SSCAN`.
 * **Sorted Set:** `ZADD`, `ZRANGE`, `ZREVRANGE`, `ZSCORE`, `ZRANK`, `ZREM`, `ZINCRBY`, `ZSCAN`.
 * **Geospatial:** `GEOADD key longitude latitude member`, `GEODIST`, `GEORADIUS`.
+* **JSON:** `JSON.SET`, `JSON.GET`, `JSON.DEL`.
+* **Probabilistic:** `PFADD`, `PFCOUNT`, `BF.ADD`, `TD.ADD`.
 
 **Transactions**
 * `MULTI` - Start transaction.
