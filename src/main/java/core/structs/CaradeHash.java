@@ -46,6 +46,10 @@ public class CaradeHash implements Serializable {
     public void setExpiry(String field, long timestamp) {
         if (map.containsKey(field)) {
             expirations.put(field, timestamp);
+            // Fix race condition: if removed concurrently
+            if (!map.containsKey(field)) {
+                expirations.remove(field);
+            }
         }
     }
     
