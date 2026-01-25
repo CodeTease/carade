@@ -54,26 +54,12 @@ public class RestoreCommand implements Command {
                 
                 // Read Type
                 int typeCode = dis.readByte();
-                // Read Value using RdbParser logic?
-                // RdbParser parses entire file usually.
-                // We need `parseValue`.
-                // RdbParser is coupled with `parse(db)`.
-                // We need to verify if RdbParser has a helper or we need to extract it.
-                // Looking at RdbParser source is not possible directly as I don't have it read, 
-                // but I saw `Carade.java` implements a mini-parser for legacy/fallback.
-                
-                // Wait, `Carade.java` has `loadData` which uses `new RdbParser(is).parse(db)`.
-                // Let's assume I need to implement a small parser here matching `DumpCommand` output.
                 
                 // DumpCommand format:
                 // [Type Byte] [Value] [Version Short] [Checksum Long]
                 
                 DataType type;
                 Object value;
-                
-                // We need to implement reading logic matching `RdbEncoder.encodeValue`
-                // I'll implement a simplified reader here since I can't easily modify RdbParser to expose single value reader 
-                // without potentially breaking its state machine if it assumes full RDB structure.
                 
                 if (typeCode == 0) { // STRING
                     type = DataType.STRING;
@@ -153,21 +139,6 @@ public class RestoreCommand implements Command {
         } else if (type == 2) { // 32 bit
             return dis.readInt() & 0xFFFFFFFFL;
         } else if (type == 3) { // Encoded
-            // This usually means compression for string, but for Length it might be special format?
-            // In RdbEncoder writeLen, type 3 is 32bit len (0x80) ?
-            // No, RdbConstants.RDB_32BITLEN is 0x80 (10xxxxxx)? No.
-            // 00 = 6bit, 01 = 14bit, 10 = 32bit.
-            // 11 = Encoded (Special)
-            // Wait, RdbEncoder uses:
-            // if len < 64: (len | (0 << 6))
-            // if len < 16384: (len ... | (1 << 6))
-            // else: (0x80) then int. 0x80 is 10000000. So type is 2 (10).
-            
-            // If type == 3 (11), it is "Encoded String" format (LZF/LZ4).
-            // But `readLen` is called for collection size. Collection size is never compressed.
-            // Only String value is compressed.
-            // So for collection size, type 3 shouldn't happen unless I misunderstood RDB.
-            // However, `readString` uses `readLen`.
              throw new RuntimeException("Unexpected length encoding for collection size: " + type);
         }
         return 0;
@@ -194,24 +165,7 @@ public class RestoreCommand implements Command {
         
         if (isEncoded) {
             int encoding = (int)len;
-            if (encoding == 3) { // LZF or LZ4 (Carade uses LZ4 as type 3/4? 
-                // RdbEncoder uses RDB_ENC_LZ4 which is likely defined as constant.
-                // In RdbEncoder: `(RdbConstants.RDB_ENCVAL << 6) | RdbConstants.RDB_ENC_LZ4`
-                // RDB_ENCVAL is 3 (11).
-                // So type is 3. Low 6 bits are the encoding.
-                // We need to check RdbConstants values.
-                // Assuming RdbConstants.RDB_ENC_LZ4 is what we wrote.
-                // We don't have RdbConstants visible, but RdbEncoder used it.
-                
-                // Let's assume standard LZF (type 3 in Redis) or our custom LZ4.
-                // If we wrote LZ4, we need to read it.
-                // Let's look at `Carade.java` or `RdbEncoder.java` imports?
-                // RdbEncoder uses `RdbConstants.RDB_ENC_LZ4`.
-                // I'll assume simplified handling: if encoding is 3 or 4 (Carade specific?), decompress.
-                // For now, let's implement basic "read compressed" reading uncompressed length and compressed length.
-                
-                // standard LZF: [compressed len] [uncompressed len] [data]
-                // LZ4 (Carade): [compressed len] [uncompressed len] [data]
+            if (encoding == 3) { // LZF or LZ4 
                 long clen = readLen(dis);
                 long ulen = readLen(dis);
                 byte[] compressed = new byte[(int)clen];

@@ -19,14 +19,7 @@ public class BitFieldCommand implements Command {
 
         String key = new String(args.get(1), StandardCharsets.UTF_8);
         List<Long> results = new ArrayList<>();
-        
-        // Need to lock for R-M-W cycle if we want atomicity for the whole batch
-        // But executeWrite works per write operation usually.
-        // For BITFIELD, it's a single atomic command.
-        // So we wrap the whole logic in executeWrite if there are writes.
-        // We need to parse first to see if it's read-only? No, BITFIELD is generally write-capable.
-        // Let's assume write capability required.
-        
+
         try {
             client.executeWrite(() -> {
                 ValueEntry entry = Carade.db.get(client.getDbIndex(), key);
@@ -53,9 +46,6 @@ public class BitFieldCommand implements Command {
                         // Expansion logic
                         int width = getWidth(type);
                         int endBit = offset + width; // simplified (offset usually bit offset?)
-                        // Redis bitfield offset can be #<index> (multiply by width) or raw.
-                        // Assuming raw bit offset for simplicity or minimal impl.
-                        // Wait, spec says: "offset" can be number.
                         
                         int neededBytes = (endBit + 7) / 8;
                         if (bytes.length < neededBytes) {

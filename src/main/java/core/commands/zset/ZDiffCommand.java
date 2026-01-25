@@ -30,17 +30,6 @@ public class ZDiffCommand implements Command {
         }
 
         if (args.size() != 2 + numKeys) {
-             // Optional WITHSCORRES?
-             // Redis syntax: ZDIFF numkeys key [key ...] [WITHSCORES]
-             // So size can be > 2 + numKeys if WITHSCORES is there.
-             // Wait, args.size() is including command.
-             // Command is arg 0.
-             // numkeys is arg 1.
-             // key1 is arg 2.
-             // keyN is arg 2 + numKeys - 1.
-             // WITHSCORES is arg 2 + numKeys.
-             
-             // So if size > 2 + numKeys, we check for WITHSCORES.
         }
 
         boolean withScores = false;

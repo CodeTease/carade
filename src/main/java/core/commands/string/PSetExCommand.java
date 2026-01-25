@@ -37,17 +37,6 @@ public class PSetExCommand implements Command {
 
         byte[] val = args.get(3);
         long expireAt = System.currentTimeMillis() + ms;
-
-        // Construct AOF args: SET key val PX ms
-        // Since we don't have PSETEX in AOF logic usually we convert to PSETEX or SET PX? 
-        // Redis propagates PSETEX as PSETEX or SET...PX? 
-        // Actually usually converts to PEXPIREAT for replication consistency.
-        // But here SetCommand converts to SET EX. 
-        // Let's stick to simple reproduction for now. 
-        // We will log as PSETEX for simplicity or SET ... PX if supported.
-        // Wait, Carade's SetCommand logs as SET ... EX.
-        // Let's log as SET key value PX ms to be robust if we ever add PX support, 
-        // OR better: PSETEX key ms value. 
         
         List<byte[]> aofArgs = new ArrayList<>();
         aofArgs.add("PSETEX".getBytes(StandardCharsets.UTF_8));

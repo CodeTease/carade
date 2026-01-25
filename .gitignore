@@ -35,8 +35,3 @@ dependency-reduced-pom.xml
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 
 .veghcache
-# PyVegh's Vegh Hooks
-.veghhooks.json
-# Old Vegh files extension, kept for backward compatibility
-*.snap
-# Not a branding: Get PyVegh in https://pypi.org/project/pyvegh/ (probably just `pip install pyvegh`)

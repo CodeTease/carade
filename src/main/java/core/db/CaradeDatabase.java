@@ -89,7 +89,7 @@ public class CaradeDatabase {
         return remove(0, key);
     }
     
-    private void notify(int dbIndex, String key, String event) {
+    protected void notify(int dbIndex, String key, String event) {
         try {
             if (Carade.pubSub == null) return; 
             String channelKey = "__keyspace@" + dbIndex + "__:" + key;
@@ -98,11 +98,15 @@ public class CaradeDatabase {
             Carade.pubSub.publish(channelEvent, key);
         } catch (Exception e) {}
     }
+
+    protected long getUsedMemory() {
+        return Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+    }
     
     public void performEvictionIfNeeded(int dbIndex) {
         if (config.maxMemory <= 0) return;
         if (writeCounter.incrementAndGet() % 50 != 0) return;
-        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        long used = getUsedMemory();
         if (used < config.maxMemory) return;
         
         String policy = config.maxMemoryPolicy;
@@ -155,7 +159,7 @@ public class CaradeDatabase {
                 if (aofHandler != null) aofHandler.log("DEL", bestKey); 
             }
             
-            used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+            used = getUsedMemory();
             attempts++;
         }
     }

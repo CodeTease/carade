@@ -35,7 +35,7 @@ import core.utils.Log;
 
 /**
  * Project: Carade
- * Version: 0.3.1
+ * Version: 0.3.2
  * Status: Stable idk / Probably production / Chaos / Forever
  * Author: CodeTease 
  */
@@ -237,7 +237,7 @@ public class Carade {
                 "/ /___/ /_/ / /  / /_/ / /_/ /  __/\n" +
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
-                " :: Carade ::       (v0.3.1) \n" +
+                " :: Carade ::       (v0.3.2) \n" +
                 " :: Engine ::       Java \n" +
                 " :: Author ::       CodeTease \n");
     }
@@ -245,7 +245,7 @@ public class Carade {
     private static final ClientHandler aofClient = new ClientHandler();
 
     public static void main(String[] args) throws Exception {
-        Log.info("\n--- CARADE v0.3.1 ---\n");
+        Log.info("\n--- CARADE v0.3.2 ---\n");
 
         // Load Config
         config = Config.load("carade.conf");

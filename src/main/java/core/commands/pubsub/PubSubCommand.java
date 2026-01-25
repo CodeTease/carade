@@ -18,16 +18,6 @@ public class PubSubCommand implements Command {
         String sub = new String(args.get(1), StandardCharsets.UTF_8).toUpperCase();
         
         if (sub.equals("CHANNELS")) {
-            // PUBSUB CHANNELS [pattern]
-            // We need to access Carade.pubSub internals.
-            // But Carade.pubSub only exposes getChannelCount().
-            // We need to list channels.
-            // Let's modify PubSub class or use reflection?
-            // Better to modify PubSub class to expose `getChannels()`.
-            // For now, let's assume we can modify PubSub.
-            
-            // Wait, I can't modify PubSub easily in this step without Plan update?
-            // Actually I am in execution phase, I can modify any file.
             
             List<String> channels = Carade.pubSub.getChannels();
             String pattern = (args.size() > 2) ? new String(args.get(2), StandardCharsets.UTF_8) : null;

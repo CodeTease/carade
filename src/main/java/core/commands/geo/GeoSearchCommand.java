@@ -152,13 +152,7 @@ public class GeoSearchCommand implements Command {
                 } else {
                     List<Object> item = new ArrayList<>();
                     item.add(r.member.getBytes(StandardCharsets.UTF_8));
-                    if (withDist) item.add(String.format("%.4f", r.dist).getBytes(StandardCharsets.UTF_8)); // Return in meters? Command doesn't specify unit for return, usually matches input or meters. Redis returns in specified unit if used. Oops, I forgot to track unit for output. 
-                    // Redis: "The distance is returned in the same unit as specified for the radius/box argument."
-                    // I will fix this next time. For now defaults to meters or raw.
-                    // Wait, I should convert back.
-                    // But I didn't store the unit. 
-                    // Let's assume meters for now or if I have time fix it. 
-                    // Actually I can infer from arguments parsing.
+                    if (withDist) item.add(String.format("%.4f", r.dist).getBytes(StandardCharsets.UTF_8)); 
                     if (withHash) item.add(r.hash);
                     if (withCoord) {
                         List<byte[]> c = new ArrayList<>();

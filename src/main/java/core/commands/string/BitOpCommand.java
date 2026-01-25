@@ -81,22 +81,7 @@ public class BitOpCommand implements Command {
                 res[i] = (byte) b;
             }
         }
-        
-        // Store result
-        // We need to use executeWrite to ensure replication/AOF if we had that fully wired up for commands
-        // But Command.execute is generally running inside lock if identified as write?
-        // Wait, ClientHandler identifies write commands via string list.
-        // We need to add BITOP to isWriteCommand list in ClientHandler? 
-        // The plan says "Register in CommandRegistry".
-        // ClientHandler checks `isWriteCommand` for `SET`, `DEL` etc.
-        // If I implement it as Command, ClientHandler calls `cmdObj.execute`.
-        // BUT ClientHandler determines locking strategy BEFORE calling execute.
-        // So I must ensure BITOP is seen as write command, OR I handle locking myself.
-        // ClientHandler code:
-        // boolean needsWriteLock = isWriteCommand(cmd) || ...
-        // if (needsWriteLock) ... executeCommand ...
-        // So I need to update `isWriteCommand` in `ClientHandler.java` as well!
-        
+
         final byte[] finalRes = res;
         client.executeWrite(() -> {
             if (finalRes.length == 0) {

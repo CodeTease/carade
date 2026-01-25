@@ -338,22 +338,9 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
         if (msg instanceof List) {
             List<byte[]> parts = (List<byte[]>) msg;
             
-            // Check Pause (except for Admin/Unpause commands typically, but Redis pauses all interaction from clients)
-            // But if we pause, we should block processing.
-            // Redis CLIENT PAUSE pauses *processing* of commands from *all clients* (except the one issuing PAUSE sometimes? No, 6.2+ allows mode).
-            // Basic impl: sleep if paused?
-            // Netty runs in event loop. Sleeping blocks everything.
-            // If we sleep here, we block I/O.
-            // We should schedule execution later or check.
-            
             if (Carade.pauseEndTime > System.currentTimeMillis()) {
                  long diff = Carade.pauseEndTime - System.currentTimeMillis();
                  if (diff > 0) {
-                     // We can't easily block Netty thread.
-                     // But strictly speaking, if we don't read, the socket buffer fills up.
-                     // The requirement is "stop processing commands".
-                     // So we can queue them or just delay processing.
-                     // Delay: schedule task.
                      ctx.executor().schedule(() -> {
                          try {
                              channelRead(ctx, msg); 
@@ -400,11 +387,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
                 ctx.close();
                 return;
             }
-            // Monitors can only run QUIT (or RESET in newer Redis, but we just ignore/block others)
-            // Just return (block) or send error? Redis usually just blocks until QUIT.
-            // But if we send error, it might break client expectation of stream. 
-            // We just ignore other commands or treat them as part of the stream?
-            // Redis doc: "In this mode, the server will not process any other command from this client, but QUIT."
             return; 
         }
 
@@ -469,16 +451,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
             }
             
             if (cmd.equals("QUIT")) {
-                // If QuitCommand wasn't executed or we want to ensure close
-                // QuitCommand implementation might not have closed the ctx if it just sent OK.
-                // But usually QUIT closes connection.
-                // Let's rely on QuitCommand doing it or check here?
-                // The switch case had `ctx.close()`.
-                // Our QuitCommand sends OK.
-                // We should probably check if channel is active or close it.
-                // But let's leave it to Command if possible. 
-                // Wait, QuitCommand in my impl just sent OK. It didn't close.
-                // I should probably check here.
                 ctx.close();
             }
 
