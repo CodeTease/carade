@@ -1,8 +1,19 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::time::Instant;
 use tokio::task;
 
 mod scenarios;
+
+#[derive(Debug, Clone, ValueEnum)]
+enum Scenario {
+    Basic,
+    Complex,
+    LargePayload,
+    Pipeline,
+    ConnectionChurn,
+    PubSub,
+    Probabilistic,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -21,6 +32,9 @@ struct Args {
 
     #[arg(long, default_value_t = 1000)]
     requests: usize,
+
+    #[arg(long, value_enum, default_value_t = Scenario::Basic)]
+    scenario: Scenario,
 }
 
 #[tokio::main]
@@ -29,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n🏋️  CARADE BENCHMARK (RUST)");
     println!("Target: {}:{}", args.host, args.port);
+    println!("Scenario: {:?}", args.scenario);
 
     // Construct connection string: redis://:password@host:port/
     let conn_str = format!("redis://:{}@{}:{}/", args.password, args.host, args.port);
@@ -47,8 +62,18 @@ async fn main() -> anyhow::Result<()> {
     for i in 0..args.clients {
         let client_clone = client.clone();
         let requests = args.requests;
+        let scenario = args.scenario.clone();
+        
         tasks.push(task::spawn(async move {
-            scenarios::basic_stress::run(client_clone, i, requests).await
+            match scenario {
+                Scenario::Basic => scenarios::basic_stress::run(client_clone, i, requests).await,
+                Scenario::Complex => scenarios::complex_structures::run(client_clone, i, requests).await,
+                Scenario::LargePayload => scenarios::large_payload::run(client_clone, i, requests).await,
+                Scenario::Pipeline => scenarios::pipeline::run(client_clone, i, requests).await,
+                Scenario::ConnectionChurn => scenarios::connection_churn::run(client_clone, i, requests).await,
+                Scenario::PubSub => scenarios::pubsub::run(client_clone, i, requests).await,
+                Scenario::Probabilistic => scenarios::probabilistic::run(client_clone, i, requests).await,
+            }
         }));
     }
 
@@ -63,11 +88,21 @@ async fn main() -> anyhow::Result<()> {
 
     let duration = start_time.elapsed();
     let duration_secs = duration.as_secs_f64();
-    let total_ops = total_successes * 2; // SET + GET per success
+    
+    // Calculate approximate ops based on scenario
+    let total_ops = match args.scenario {
+        Scenario::Basic => total_successes * 2, // SET + GET
+        Scenario::Complex => total_successes * 3, // ZADD + LPUSH + RPOP
+        Scenario::LargePayload => total_successes * 2, // SET + GET
+        Scenario::Pipeline => total_successes, // Total commands executed
+        Scenario::ConnectionChurn => total_successes, // PING
+        Scenario::PubSub => total_successes, // Messages published/received
+        Scenario::Probabilistic => total_successes * 2, // BF.ADD + BF.EXISTS
+    };
 
     println!("\n==============================");
-    println!("🔥 FINAL RESULTS");
-    println!("✅ Total Ops:    {}", total_ops);
+    println!("🔥 FINAL RESULTS ({:?})", args.scenario);
+    println!("✅ Total Ops (approx):    {}", total_ops);
     println!("⏱️  Duration:     {:.2}s", duration_secs);
     if duration_secs > 0.0 {
         println!("🚀 Throughput:   {:.0} ops/sec", total_ops as f64 / duration_secs);
