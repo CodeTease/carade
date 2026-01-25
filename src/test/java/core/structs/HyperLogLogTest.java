@@ -95,4 +95,42 @@ public class HyperLogLogTest {
         pfCount.execute(client, makeArgs("PFCOUNT", "hll_merged"));
         assertEquals(5L, client.lastIntegerResponse);
     }
+
+    @Test
+    public void testPfMergeErrorRate() {
+        PfAddCommand pfAdd = new PfAddCommand();
+        PfMergeCommand pfMerge = new PfMergeCommand();
+        PfCountCommand pfCount = new PfCountCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        int numSets = 5;
+        int itemsPerSet = 1000;
+        
+        for (int i = 0; i < numSets; i++) {
+            List<byte[]> args = new ArrayList<>();
+            args.add("PFADD".getBytes(StandardCharsets.UTF_8));
+            args.add(("hll_" + i).getBytes(StandardCharsets.UTF_8));
+            for (int j = 0; j < itemsPerSet; j++) {
+                args.add(("val_" + i + "_" + j).getBytes(StandardCharsets.UTF_8));
+            }
+            pfAdd.execute(client, args);
+        }
+        
+        List<byte[]> mergeArgs = new ArrayList<>();
+        mergeArgs.add("PFMERGE".getBytes(StandardCharsets.UTF_8));
+        mergeArgs.add("hll_final".getBytes(StandardCharsets.UTF_8));
+        for (int i = 0; i < numSets; i++) {
+            mergeArgs.add(("hll_" + i).getBytes(StandardCharsets.UTF_8));
+        }
+        
+        pfMerge.execute(client, mergeArgs);
+        
+        pfCount.execute(client, makeArgs("PFCOUNT", "hll_final"));
+        long count = client.lastIntegerResponse;
+        long expected = numSets * itemsPerSet; // 5000 unique items
+        
+        // HLL standard error is ~0.81%. Allow 5% tolerance here.
+        double error = Math.abs(count - expected) / (double) expected;
+        assertTrue(error < 0.05, "Error rate " + error + " too high for HLL merge (got " + count + ", expected " + expected + ")");
+    }
 }

@@ -91,4 +91,79 @@ public class SetCommandTest {
         assertNotNull(client.lastError);
         assertTrue(client.lastError.contains("integer"));
     }
+
+    @Test
+    public void testMutuallyExclusiveOptions() {
+        SetCommand cmd = new SetCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        // SET k v NX XX
+        List<byte[]> args = new ArrayList<>();
+        args.add("SET".getBytes());
+        args.add("k".getBytes());
+        args.add("v".getBytes());
+        args.add("NX".getBytes());
+        args.add("XX".getBytes());
+        
+        cmd.execute(client, args);
+        
+        assertNotNull(client.lastError);
+        assertTrue(client.lastError.contains("syntax error"));
+    }
+
+    @Test
+    public void testTimeUnits() {
+        SetCommand cmd = new SetCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        // SET k1 v EX 1
+        List<byte[]> args1 = new ArrayList<>();
+        args1.add("SET".getBytes());
+        args1.add("k1".getBytes());
+        args1.add("v".getBytes());
+        args1.add("EX".getBytes());
+        args1.add("1".getBytes());
+        
+        long start = System.currentTimeMillis();
+        cmd.execute(client, args1);
+        ValueEntry v1 = CaradeDatabase.getInstance().get(0, "k1");
+        long diff1 = v1.expireAt - start;
+        assertTrue(diff1 >= 1000 && diff1 < 2000, "EX should use seconds");
+        
+        // SET k2 v PX 1000
+        List<byte[]> args2 = new ArrayList<>();
+        args2.add("SET".getBytes());
+        args2.add("k2".getBytes());
+        args2.add("v".getBytes());
+        args2.add("PX".getBytes());
+        args2.add("1000".getBytes());
+        
+        start = System.currentTimeMillis();
+        cmd.execute(client, args2);
+        ValueEntry v2 = CaradeDatabase.getInstance().get(0, "k2");
+        long diff2 = v2.expireAt - start;
+        assertTrue(diff2 >= 1000 && diff2 < 2000, "PX should use milliseconds");
+    }
+
+    @Test
+    public void testLargeValue() {
+        SetCommand cmd = new SetCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        int size = 10 * 1024 * 1024; // 10MB
+        byte[] largeVal = new byte[size];
+        
+        // SET k large
+        List<byte[]> args = new ArrayList<>();
+        args.add("SET".getBytes());
+        args.add("k_large".getBytes());
+        args.add(largeVal);
+        
+        cmd.execute(client, args);
+        
+        ValueEntry v = CaradeDatabase.getInstance().get(0, "k_large");
+        assertNotNull(v);
+        assertEquals(size, ((byte[])v.getValue()).length);
+        assertEquals("OK", client.lastResponse);
+    }
 }

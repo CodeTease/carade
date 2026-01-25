@@ -111,4 +111,27 @@ public class GeoSpatialTest {
         assertTrue(client.lastArray.contains("Catania"));
         assertFalse(client.lastArray.contains("Palermo"));
     }
+
+    @Test
+    public void testGeoHashEdgeCases() {
+        GeoAddCommand geoAdd = new GeoAddCommand();
+        GeoDistCommand geoDist = new GeoDistCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        // Add points near poles and dateline
+        // North Pole (approx)
+        geoAdd.execute(client, makeArgs("GEOADD", "edge", "0", "85", "north_pole_ish"));
+        // Date Line
+        geoAdd.execute(client, makeArgs("GEOADD", "edge", "179.9", "0", "dateline_east"));
+        geoAdd.execute(client, makeArgs("GEOADD", "edge", "-179.9", "0", "dateline_west"));
+        
+        // Check distance across dateline
+        // Should be small (~22km)
+        geoDist.execute(client, makeArgs("GEODIST", "edge", "dateline_east", "dateline_west", "km"));
+        assertNotNull(client.lastResponse);
+        double dist = Double.parseDouble(client.lastResponse);
+        // Note: Standard Haversine usually handles this if implemented correctly using sin/cos
+        // 0.2 degrees longitude at equator is ~22km.
+        assertTrue(dist < 30.0, "Distance across dateline should be small, got " + dist);
+    }
 }

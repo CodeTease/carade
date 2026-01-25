@@ -23,6 +23,11 @@ public class ScriptManager {
 
     private ScriptManager() {
         globals = JsePlatform.debugGlobals();
+        // Sandbox: Remove dangerous libraries
+        globals.set("luajava", LuaValue.NIL);
+        globals.set("io", LuaValue.NIL);
+        globals.set("os", LuaValue.NIL);
+        globals.set("package", LuaValue.NIL);
     }
     
     public static ScriptManager getInstance() {

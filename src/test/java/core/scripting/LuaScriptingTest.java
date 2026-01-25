@@ -6,7 +6,6 @@ import core.db.CaradeDatabase;
 import core.db.ValueEntry;
 import core.db.DataType;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -151,5 +150,43 @@ public class LuaScriptingTest {
         // Verify response is error
         assertNotNull(client.lastResponseString);
         assertTrue(client.lastResponseString.contains("Script killed"), "Should report script killed. Got: " + client.lastResponseString);
+    }
+
+    @Test
+    public void testSandboxing() {
+        EvalCommand eval = new EvalCommand();
+        MockClientHandler client = new MockClientHandler();
+        
+        // Try to access java System directly or via luajava
+        // Note: standard JsePlatform puts 'luajava' in globals.
+        eval.execute(client, makeArgs("EVAL", "return luajava.bindClass('java.lang.System').exit(0)", "0"));
+        
+        // If successful, the JVM exits and test aborts! We assume it might fail or return error.
+        // We can test something safer like property access.
+        eval.execute(client, makeArgs("EVAL", "return luajava.bindClass('java.lang.System').getProperty('java.version')", "0"));
+        
+        // If it returns a version string, it's NOT sandboxed.
+        // We expect error.
+        
+        boolean isError = client.lastResponseString != null && 
+            (client.lastResponseString.contains("ERR") || client.lastResponseString.contains("nil"));
+        
+        // If we got a version string, fail.
+        if (!isError && client.lastResponseData != null) {
+             String resp = new String((byte[])client.lastResponseData, StandardCharsets.UTF_8);
+             assertFalse(resp.contains("."), "Should not return java version: " + resp);
+        }
+        
+        // Check os.execute
+        client.lastResponseString = null;
+        eval.execute(client, makeArgs("EVAL", "return os.execute('ls')", "0"));
+        assertTrue(client.lastResponseString.contains("ERR") || client.lastResponseString.contains("attempt to call field 'execute'") || client.lastResponseString.contains("attempt to index global 'os'"),
+            "Should not allow os.execute. Got: " + client.lastResponseString);
+            
+        // Check io.open
+        client.lastResponseString = null;
+        eval.execute(client, makeArgs("EVAL", "return io.open('pom.xml')", "0"));
+        assertTrue(client.lastResponseString.contains("ERR") || client.lastResponseString.contains("attempt to call field 'open'") || client.lastResponseString.contains("attempt to index global 'io'"),
+            "Should not allow io.open. Got: " + client.lastResponseString);
     }
 }

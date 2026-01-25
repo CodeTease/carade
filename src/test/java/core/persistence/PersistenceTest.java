@@ -5,6 +5,7 @@ import core.db.DataType;
 import core.db.ValueEntry;
 import core.persistence.rdb.RdbEncoder;
 import core.persistence.rdb.RdbParser;
+import core.structs.CaradeZSet;
 import org.junit.jupiter.api.Test;
 
 import java.io.*;
@@ -31,6 +32,11 @@ public class PersistenceTest {
         ConcurrentHashMap<String, String> hash = new ConcurrentHashMap<>();
         hash.put("f1", "v1");
         db.put(0, "h", new ValueEntry(hash, DataType.HASH, -1));
+
+        CaradeZSet zset = new CaradeZSet();
+        zset.add(10.5, "m1");
+        zset.add(20.0, "m2");
+        db.put(0, "z", new ValueEntry(zset, DataType.ZSET, -1));
         
         // Save
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -49,7 +55,7 @@ public class PersistenceTest {
         new RdbParser(bais).parse(db);
         
         // Verify
-        assertEquals(3, db.size(0));
+        assertEquals(4, db.size(0));
         
         ValueEntry vS = db.get(0, "s");
         assertEquals(DataType.STRING, vS.type);
@@ -65,5 +71,12 @@ public class PersistenceTest {
         assertEquals(DataType.HASH, vH.type);
         ConcurrentHashMap<String, String> hLoaded = (ConcurrentHashMap<String, String>) vH.getValue();
         assertEquals("v1", hLoaded.get("f1"));
+        
+        ValueEntry vZ = db.get(0, "z");
+        assertEquals(DataType.ZSET, vZ.type);
+        CaradeZSet zLoaded = (CaradeZSet) vZ.getValue();
+        assertEquals(2, zLoaded.size());
+        assertEquals(10.5, zLoaded.score("m1"));
+        assertEquals(20.0, zLoaded.score("m2"));
     }
 }

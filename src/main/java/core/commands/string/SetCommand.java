@@ -38,11 +38,23 @@ public class SetCommand implements Command {
                     client.sendError("ERR value is not an integer or out of range");
                     return;
                 }
+            } else if (arg.equals("PX") && i + 1 < args.size()) {
+                 try { 
+                    ttlVal = Long.parseLong(new String(args.get(++i), StandardCharsets.UTF_8)) + System.currentTimeMillis(); 
+                } catch (Exception e) {
+                    client.sendError("ERR value is not an integer or out of range");
+                    return;
+                }
             } else if (arg.equals("NX")) {
                 nx = true;
             } else if (arg.equals("XX")) {
                 xx = true;
             }
+        }
+
+        if (nx && xx) {
+            client.sendError("ERR syntax error");
+            return;
         }
         
         final long finalTtl = ttlVal;

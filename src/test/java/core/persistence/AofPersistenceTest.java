@@ -60,6 +60,32 @@ public class AofPersistenceTest {
     }
 
     @Test
+    public void testTruncatedAof() throws IOException {
+        // Generate valid AOF
+        logger.log("SET", "k1", "v1");
+        logger.log("SET", "k2", "v2");
+        logger.flush();
+        
+        // Append garbage
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(aofFile, true)) {
+            fos.write("INCOMPLETE_CMD".getBytes());
+        }
+        
+        CaradeDatabase.getInstance().clearAll();
+        
+        // Replay
+        try {
+            logger.replay(Carade::executeAofCommand);
+        } catch (Exception e) {
+            // Expected to fail on garbage or just log error
+        }
+        
+        // Verify valid data was loaded
+        assertEquals("v1", new String((byte[])CaradeDatabase.getInstance().get(0, "k1").getValue()));
+        assertEquals("v2", new String((byte[])CaradeDatabase.getInstance().get(0, "k2").getValue()));
+    }
+
+    @Test
     public void testAofRewrite() {
         // Populate DB
         CaradeDatabase.getInstance().put("k1", new ValueEntry("v1".getBytes(), DataType.STRING, -1));

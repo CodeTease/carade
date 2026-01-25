@@ -1,7 +1,6 @@
 package core.protocol;
 
 import core.protocol.netty.NettyRespDecoder;
-import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
