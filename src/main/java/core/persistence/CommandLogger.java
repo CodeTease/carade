@@ -79,7 +79,7 @@ public class CommandLogger {
         }
     }
 
-    private synchronized void flush() {
+    public synchronized void flush() {
         if (outStream != null) {
             try {
                 outStream.flush();
