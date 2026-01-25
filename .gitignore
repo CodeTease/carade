@@ -31,6 +31,7 @@ __pycache__
 target
 .vscode
 dependency-reduced-pom.xml
+.jqwik-database
 
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 

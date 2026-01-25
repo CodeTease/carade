@@ -44,7 +44,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>6.0.2</version>
+            <version>5.10.1</version>
             <scope>test</scope>
         </dependency>
 
@@ -54,6 +54,15 @@
             <artifactId>luaj-jse</artifactId>
             <version>3.0.1</version>
         </dependency>
+
+        <!-- Property-Based Testing -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <version>1.8.0</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>

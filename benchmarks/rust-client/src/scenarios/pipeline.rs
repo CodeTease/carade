@@ -1,29 +1,22 @@
-pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::Result<usize> {
+use crate::scenarios::BenchStats;
+
+pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::Result<BenchStats> {
     let mut con = client.get_multiplexed_async_connection().await?;
-    let mut successes = 0;
-    
-    // Batch size
+    let mut stats = BenchStats::new();
     let batch_size = 100;
     let batches = requests / batch_size;
     
     for b in 0..batches {
         let mut pipe = redis::pipe();
-        
         for i in 0..batch_size {
             let global_idx = b * batch_size + i;
             let key = format!("bench_pipe:{}:{}", id, global_idx);
             let val = "v";
-            pipe.set(&key, val).ignore(); // ignore result of set in the output
+            pipe.set(&key, val).ignore();
         }
-        
-        // Execute pipeline
-        // We expect () because we ignored all individual command results
         let _: () = pipe.query_async(&mut con).await?;
-        
-        successes += batch_size;
     }
     
-    // Handle remaining
     let remaining = requests % batch_size;
     if remaining > 0 {
          let mut pipe = redis::pipe();
@@ -34,8 +27,8 @@ pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::R
             pipe.set(&key, val).ignore();
          }
          let _: () = pipe.query_async(&mut con).await?;
-         successes += remaining;
     }
     
-    Ok(successes)
+    stats.ops = requests;
+    Ok(stats)
 }

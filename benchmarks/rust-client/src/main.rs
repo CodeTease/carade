@@ -1,6 +1,7 @@
 use clap::{Parser, ValueEnum};
 use std::time::Instant;
 use tokio::task;
+use scenarios::BenchStats;
 
 mod scenarios;
 
@@ -13,6 +14,9 @@ enum Scenario {
     ConnectionChurn,
     PubSub,
     Probabilistic,
+    LuaStress,
+    WorkloadSkew,
+    Backpressure,
 }
 
 #[derive(Parser, Debug)]
@@ -73,14 +77,18 @@ async fn main() -> anyhow::Result<()> {
                 Scenario::ConnectionChurn => scenarios::connection_churn::run(client_clone, i, requests).await,
                 Scenario::PubSub => scenarios::pubsub::run(client_clone, i, requests).await,
                 Scenario::Probabilistic => scenarios::probabilistic::run(client_clone, i, requests).await,
+                Scenario::LuaStress => scenarios::lua_stress::run(client_clone, i, requests).await,
+                Scenario::WorkloadSkew => scenarios::workload_skew::run(client_clone, i, requests).await,
+                Scenario::Backpressure => scenarios::backpressure::run(client_clone, i, requests).await,
             }
         }));
     }
 
-    let mut total_successes = 0;
+    let mut total_stats = BenchStats::new();
+
     for t in tasks {
         match t.await {
-            Ok(Ok(successes)) => total_successes += successes,
+            Ok(Ok(stats)) => total_stats.merge(&stats),
             Ok(Err(e)) => eprintln!("Task failed: {}", e),
             Err(e) => eprintln!("Join error: {}", e),
         }
@@ -88,17 +96,7 @@ async fn main() -> anyhow::Result<()> {
 
     let duration = start_time.elapsed();
     let duration_secs = duration.as_secs_f64();
-    
-    // Calculate approximate ops based on scenario
-    let total_ops = match args.scenario {
-        Scenario::Basic => total_successes * 2, // SET + GET
-        Scenario::Complex => total_successes * 3, // ZADD + LPUSH + RPOP
-        Scenario::LargePayload => total_successes * 2, // SET + GET
-        Scenario::Pipeline => total_successes, // Total commands executed
-        Scenario::ConnectionChurn => total_successes, // PING
-        Scenario::PubSub => total_successes, // Messages published/received
-        Scenario::Probabilistic => total_successes * 2, // BF.ADD + BF.EXISTS
-    };
+    let total_ops = total_stats.ops;
 
     println!("\n==============================");
     println!("🔥 FINAL RESULTS ({:?})", args.scenario);
@@ -109,6 +107,16 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("🚀 Throughput:   N/A ops/sec");
     }
+
+    if !total_stats.histogram.is_empty() {
+        println!("\n📊 Latency Distribution (microseconds):");
+        println!("   p50:   {}", total_stats.histogram.value_at_quantile(0.5));
+        println!("   p90:   {}", total_stats.histogram.value_at_quantile(0.9));
+        println!("   p99:   {}", total_stats.histogram.value_at_quantile(0.99));
+        println!("   p99.9: {}", total_stats.histogram.value_at_quantile(0.999));
+        println!("   Max:   {}", total_stats.histogram.max());
+    }
+
     println!("==============================\n");
 
     Ok(())

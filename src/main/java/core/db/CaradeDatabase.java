@@ -199,7 +199,7 @@ public class CaradeDatabase {
     }
 
     public void cleanup() {
-         long now = System.currentTimeMillis();
+         long now = core.utils.Time.now();
          for(int i=0; i<DB_COUNT; i++) {
              Iterator<Map.Entry<String, ValueEntry>> it = databases[i].entrySet().iterator();
              while (it.hasNext()) {

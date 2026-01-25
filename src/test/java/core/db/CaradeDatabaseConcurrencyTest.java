@@ -68,11 +68,6 @@ public class CaradeDatabaseConcurrencyTest {
         // We expect "expired" to be called exactly ONCE if logic is correct.
         // If bug exists, it will be 2.
         
-        // Asserting the race condition exists (since the prompt asks to test FOR the problem)
-        // Or should I assert it works correctly?
-        // Prompt: "Lazy Expiration Race: Test trường hợp 2 luồng cùng get một key sắp hết hạn. Đảm bảo chỉ 1 luồng trigger việc remove và notify..."
-        // So the test should FAIL if the bug exists.
-        
         assertEquals(1, db.expiredNotifications.get(), "Should notify 'expired' exactly once");
         assertEquals(1, db.delNotifications.get(), "Should notify 'del' exactly once");
     }
