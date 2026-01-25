@@ -29,8 +29,9 @@ public class CaradeHash implements Serializable {
     }
     
     public String remove(String field) {
+        String val = map.remove(field);
         expirations.remove(field);
-        return map.remove(field);
+        return val;
     }
     
     public int size() {

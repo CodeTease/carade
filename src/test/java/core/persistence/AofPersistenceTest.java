@@ -25,7 +25,8 @@ public class AofPersistenceTest {
         
         Carade.db = CaradeDatabase.getInstance();
         CaradeDatabase.getInstance().clearAll();
-        
+        Carade.resetAofClient();
+
         // Initialize custom logger for this test
         logger = new CommandLogger(aofFile);
         Carade.aofHandler = logger;

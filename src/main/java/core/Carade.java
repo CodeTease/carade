@@ -425,6 +425,13 @@ public class Carade {
             Log.error("⚠️ Error executing AOF command: " + cmdName + " - " + e.getMessage());
         }
     }
+
+    public static void resetAofClient() {
+        aofClient.dbIndex = 0;
+        aofClient.setInTransaction(false);
+        aofClient.clearTransactionQueue();
+        aofClient.setCurrentUser(null);
+    }
     
     private static void cleanupExpiredCursors() {
         long now = System.currentTimeMillis();
