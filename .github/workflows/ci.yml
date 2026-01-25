@@ -33,12 +33,11 @@ jobs:
           done
       - name: Run Tests
         run: |
-          python3 ping.py
-          python3 benchmarks/scripts/benchmark.py
+          python3 tools/ping.py
       - name: Run Rust Benchmark
         run: |
-          cd benchmarks/rust-client
-          cargo run --release -- --clients 20 --requests 1000
+          cd tools/rust-benchmarks
+          cargo run --release -- --clients 20 --requests 2000
 
       - name: View Log on Failure
         if: failure()
@@ -70,12 +69,11 @@ jobs:
           python-version: '3.12'
       - name: Run Tests
         run: |
-          python3 ping.py
-          python3 benchmarks/scripts/benchmark.py
+          python3 tools/ping.py
       - name: Run Rust Benchmark
         run: |
-          cd benchmarks/rust-client
-          cargo run --release -- --clients 20 --requests 1000
+          cd tools/rust-benchmarks
+          cargo run --release -- --clients 20 --requests 2000
       - name: Logs on Failure
         if: failure()
         run: docker logs carade-server

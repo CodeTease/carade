@@ -23,6 +23,10 @@ public class CaradeDatabase {
         return INSTANCE;
     }
 
+    public static synchronized void resetSingleton() {
+        INSTANCE = null;
+    }
+
     private final Config config;
     private final CommandLogger aofHandler;
     private final AtomicInteger writeCounter = new AtomicInteger(0);
