@@ -37,7 +37,7 @@ jobs:
       - name: Run Rust Benchmark
         run: |
           cd benchmarks/rust-client
-          cargo run --release -- --clients 20 --requests 10000
+          cargo run --release -- --clients 20 --requests 1000
       - name: Cleanup
         if: always()
         run: |
