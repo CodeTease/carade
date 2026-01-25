@@ -39,6 +39,11 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     private Set<String> watching = new HashSet<>();
     private List<List<byte[]>> transactionQueue = new ArrayList<>();
     private OutputStream captureBuffer = null; // For capturing output during transactions
+    private boolean disableAofLogging = false;
+
+    public void setDisableAofLogging(boolean disable) {
+        this.disableAofLogging = disable;
+    }
 
     public boolean isInTransaction() {
         return isInTransaction;
@@ -253,18 +258,21 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
     }
 
     public void executeWrite(Runnable dbOp, String cmdName, Object... args) {
-        List<byte[]> parts = new ArrayList<>();
-        parts.add(cmdName.getBytes(StandardCharsets.UTF_8));
-        for (Object arg : args) {
-            if (arg instanceof String) {
-                parts.add(((String) arg).getBytes(StandardCharsets.UTF_8));
-            } else if (arg instanceof byte[]) {
-                parts.add((byte[]) arg);
-            } else {
-                parts.add(String.valueOf(arg).getBytes(StandardCharsets.UTF_8));
+        byte[] serializedCmd = null;
+        if (!disableAofLogging) {
+            List<byte[]> parts = new ArrayList<>();
+            parts.add(cmdName.getBytes(StandardCharsets.UTF_8));
+            for (Object arg : args) {
+                if (arg instanceof String) {
+                    parts.add(((String) arg).getBytes(StandardCharsets.UTF_8));
+                } else if (arg instanceof byte[]) {
+                    parts.add((byte[]) arg);
+                } else {
+                    parts.add(String.valueOf(arg).getBytes(StandardCharsets.UTF_8));
+                }
             }
+            serializedCmd = Resp.array(parts);
         }
-        byte[] serializedCmd = Resp.array(parts);
         WriteSequencer.getInstance().executeWrite(dbOp, serializedCmd);
     }
     

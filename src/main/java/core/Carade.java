@@ -243,6 +243,9 @@ public class Carade {
     }
 
     private static final ClientHandler aofClient = new ClientHandler();
+    static {
+        aofClient.setDisableAofLogging(true);
+    }
 
     public static void main(String[] args) throws Exception {
         Log.info("\n--- CARADE v0.3.2 ---\n");
