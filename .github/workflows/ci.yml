@@ -40,7 +40,7 @@ jobs:
           cargo run --release -- --clients 20 --requests 1000
 
       - name: View Log on Failure
-	      if: failure()
+        if: failure()
         run: cat carade.log 
 
       - name: Cleanup
