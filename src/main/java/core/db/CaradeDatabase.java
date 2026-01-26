@@ -53,8 +53,9 @@ public class CaradeDatabase {
         ValueEntry v = db.get(key);
         if (v != null) {
             if (v.isExpired()) {
-                remove(dbIndex, key); 
-                notify(dbIndex, key, "expired");
+                if (remove(dbIndex, key) != null) {
+                    notify(dbIndex, key, "expired");
+                }
                 Carade.keyspaceMisses.incrementAndGet();
                 return null;
             }
