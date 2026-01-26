@@ -26,6 +26,7 @@ replay_pid*
 
 *.dump
 *.aof
+.venv
 venv
 __pycache__
 target
