@@ -5,7 +5,7 @@ pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::R
     let mut stats = BenchStats::new();
     let batch_size = 100;
     let batches = requests / batch_size;
-    
+
     for b in 0..batches {
         let mut pipe = redis::pipe();
         for i in 0..batch_size {
@@ -16,19 +16,19 @@ pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::R
         }
         let _: () = pipe.query_async(&mut con).await?;
     }
-    
+
     let remaining = requests % batch_size;
     if remaining > 0 {
-         let mut pipe = redis::pipe();
-         for i in 0..remaining {
+        let mut pipe = redis::pipe();
+        for i in 0..remaining {
             let global_idx = batches * batch_size + i;
             let key = format!("bench_pipe:{}:{}", id, global_idx);
             let val = "v";
             pipe.set(&key, val).ignore();
-         }
-         let _: () = pipe.query_async(&mut con).await?;
+        }
+        let _: () = pipe.query_async(&mut con).await?;
     }
-    
+
     stats.ops = requests;
     Ok(stats)
 }

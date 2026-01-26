@@ -434,13 +434,6 @@ public class ClientHandler extends ChannelInboundHandlerAdapter implements PubSu
             boolean needsWriteLock = isWriteCommand(cmd) || Arrays.asList("BGREWRITEAOF", "EXEC", "MULTI", "DISCARD").contains(cmd);
             
             // Note: EXEC needs write lock because it executes write commands
-            // MULTI/DISCARD change internal state, but might be safe without global lock if state is local.
-            // But we use global lock for simplicity in original code?
-            // Original code: MULTI, DISCARD, EXEC were handled before lock logic.
-            // Now they are Commands. We should treat them carefully.
-            // Actually, `EXEC` executes commands which might need locks.
-            // So executing `EXEC` under write lock is safe.
-            // `MULTI`/`DISCARD` just change local boolean, so they are fast.
 
             if (needsWriteLock) {
                 Carade.globalRWLock.writeLock().lock();

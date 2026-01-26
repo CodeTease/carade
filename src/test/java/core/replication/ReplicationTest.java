@@ -2,8 +2,6 @@ package core.replication;
 
 import core.Carade;
 import core.MockClientHandler;
-import core.commands.Command;
-import core.commands.CommandRegistry;
 import core.db.CaradeDatabase;
 import core.db.ValueEntry;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,13 +61,6 @@ public class ReplicationTest {
 
         ValueEntry entry = Carade.db.get(0, "mylist");
         assertNotNull(entry);
-        // Depending on implementation, checking size or content
-        // Assuming LIST type
-        // We can't easily cast to ConcurrentLinkedDeque without importing or reflection if not public, 
-        // but we know it's a Collection or similar.
-        // Actually ValueEntry.getValue() returns Object.
-        // Let's assume standard implementation.
-        // But for unit test, just asserting existence is good first step.
     }
 
     @Test
@@ -105,31 +96,9 @@ public class ReplicationTest {
         
         psync.execute(client, args);
         
-        // 3. Expect +CONTINUE
-        // lastResponse might be the last thing sent.
-        // Psync sends: +CONTINUE, then Missing Data.
-        // MockClientHandler updates lastResponse on each send.
-        // So lastResponse should be the data (cmd bytes) or CONTINUE if data wasn't sent as string.
-        // sendResponse(byte[], String) handles both.
-        // Psync uses sendResponse(bytes, null).
-        // MockClientHandler.sendResponse(bytes, null) sets lastResponse to new String(bytes).
-        
-        // If it sends CONTINUE then data, lastResponse will be data.
-        // We need to verify that we received CONTINUE somewhere.
-        // But MockClientHandler overwrites lastResponse.
-        // I should have appended to a list in MockClientHandler for better testing?
-        // But for now, if it's partial resync, it sends CONTINUE.
-        // If it was full resync, it sends FULLRESYNC ...
-        
-        // Since we only verify lastResponse, we might miss "CONTINUE" if data follows immediately.
-        // But if we check that it is NOT "FULLRESYNC...", that's a hint.
-        // Also the data received should match 'setCmd'.
+        // 3. Expect +CONTINUE 
         
         assertNotNull(client.lastResponse);
         assertFalse(client.lastResponse.startsWith("FULLRESYNC"), "Should not be FULLRESYNC");
-        
-        // Ideally we check for CONTINUE. 
-        // With current MockClientHandler, we can't see history.
-        // I'll accept checking it's not FULLRESYNC and presumably data.
     }
 }

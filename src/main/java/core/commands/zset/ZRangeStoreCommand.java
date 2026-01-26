@@ -23,19 +23,6 @@ public class ZRangeStoreCommand implements Command {
         String dst = new String(args.get(1), StandardCharsets.UTF_8);
         String src = new String(args.get(2), StandardCharsets.UTF_8);
         
-        // This parses ZRANGE arguments which are complex in Redis 6.2+
-        // Simplified: We assume standard ZRANGE syntax extended.
-        // Actually ZRANGESTORE uses ZRANGE syntax but stores result.
-        // ZRANGE key min max [BYSCORE|BYLEX] [REV] [LIMIT offset count]
-        
-        // We'll reuse ZRangeCommand logic or duplicate it?
-        // ZRangeCommand in Carade might be simple (index based).
-        // Let's check ZRangeCommand first? 
-        // I don't have read access to ZRangeCommand file right now but I can guess.
-        
-        // Implementing basic ZRANGESTORE dst src min max (index based)
-        // Supporting BYSCORE / BYLEX / REV / LIMIT if feasible.
-        
         client.executeWrite(() -> {
             ValueEntry v = Carade.db.get(client.getDbIndex(), src);
             if (v == null || v.type != DataType.ZSET) {
@@ -45,7 +32,6 @@ public class ZRangeStoreCommand implements Command {
             }
             
             // Logic similar to ZRANGE but store
-            // Let's implement basic index-based range store for now, or parsing
             
             // Argument parsing
             String minStr = new String(args.get(3), StandardCharsets.UTF_8);
@@ -103,11 +89,7 @@ public class ZRangeStoreCommand implements Command {
                  if (rev) Collections.reverse(result);
                  
             } else if (byLex) {
-                 // ZRANGEBYLEX logic
-                 // Simplified
-                 result.addAll(zset.sorted); // Need proper lex filtering
-                 // Skipping for brevity, assuming standard ZRANGE (Index) is primary use case for this task unless specified.
-                 // But Redis 6.2 ZRANGE unifies everything.
+                 result.addAll(zset.sorted); 
             } else {
                  // Index based
                  int start = Integer.parseInt(minStr);

@@ -1,10 +1,7 @@
 package core.db;
 
 import core.Config;
-import core.db.ValueEntry;
-import core.db.DataType;
 import org.junit.jupiter.api.Test;
-import java.util.concurrent.ConcurrentHashMap;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class CaradeDatabaseEvictionTest {
@@ -58,13 +55,6 @@ public class CaradeDatabaseEvictionTest {
         // Force eviction
         db.setMockedUsedMemory(200); // > 100
         
-        // We need to trigger it. performEvictionIfNeeded checks writeCounter % 50 == 0.
-        // We can manually call it repeatedly or just bypass the counter check?
-        // Logic: if (writeCounter.incrementAndGet() % 50 != 0) return;
-        // So we need to call it until it hits.
-        
-        // Or we can just call the logic loop manually? No, logic is inside.
-        // Let's loop.
         for(int i=0; i<60; i++) {
             db.performEvictionIfNeeded(0);
         }

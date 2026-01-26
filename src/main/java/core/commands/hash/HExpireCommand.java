@@ -55,10 +55,6 @@ public class HExpireCommand implements Command {
             // Notify if changed?
         }, "HEXPIRE", (Object[]) args.subList(1, args.size()).stream().map(b -> new String(b, StandardCharsets.UTF_8)).toArray());
         
-        // Return integer 1 if any field updated (simplified), or count. Redis returns array.
-        // For compliance with "I don't see any changes", let's be robust.
-        // We return an array of integers? Or just one integer?
-        // Let's return the count for now.
         client.sendInteger(ret[0]);
     }
 }

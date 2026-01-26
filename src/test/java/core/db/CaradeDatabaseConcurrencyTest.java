@@ -1,8 +1,6 @@
 package core.db;
 
 import core.Config;
-import core.db.ValueEntry;
-import core.db.DataType;
 import org.junit.jupiter.api.Test;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -77,12 +75,6 @@ public class CaradeDatabaseConcurrencyTest {
         Config config = new Config();
         config.maxMemory = 1024 * 1024; // 1MB
         config.maxMemoryPolicy = "allkeys-lru";
-        
-        // Override getUsedMemory to trigger eviction?
-        // Actually this test is "Eviction under Load" - checks for locking/consistency.
-        // We can just rely on writeCounter logic in base class.
-        // But base class uses Runtime memory. That's hard to control.
-        // Let's use a subclass that fakes memory usage.
         
         class EvictionDB extends CaradeDatabase {
             long fakeUsed = 0;

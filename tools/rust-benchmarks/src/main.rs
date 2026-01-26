@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
+use scenarios::BenchStats;
 use std::time::Instant;
 use tokio::task;
-use scenarios::BenchStats;
 
 mod scenarios;
 
@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("\n🚀 Starting stress test with {} clients, {} requests each...", args.clients, args.requests);
+    println!(
+        "\n🚀 Starting stress test with {} clients, {} requests each...",
+        args.clients, args.requests
+    );
     let start_time = Instant::now();
     let mut tasks = Vec::with_capacity(args.clients);
 
@@ -67,19 +70,31 @@ async fn main() -> anyhow::Result<()> {
         let client_clone = client.clone();
         let requests = args.requests;
         let scenario = args.scenario.clone();
-        
+
         tasks.push(task::spawn(async move {
             match scenario {
                 Scenario::Basic => scenarios::basic_stress::run(client_clone, i, requests).await,
-                Scenario::Complex => scenarios::complex_structures::run(client_clone, i, requests).await,
-                Scenario::LargePayload => scenarios::large_payload::run(client_clone, i, requests).await,
+                Scenario::Complex => {
+                    scenarios::complex_structures::run(client_clone, i, requests).await
+                }
+                Scenario::LargePayload => {
+                    scenarios::large_payload::run(client_clone, i, requests).await
+                }
                 Scenario::Pipeline => scenarios::pipeline::run(client_clone, i, requests).await,
-                Scenario::ConnectionChurn => scenarios::connection_churn::run(client_clone, i, requests).await,
+                Scenario::ConnectionChurn => {
+                    scenarios::connection_churn::run(client_clone, i, requests).await
+                }
                 Scenario::PubSub => scenarios::pubsub::run(client_clone, i, requests).await,
-                Scenario::Probabilistic => scenarios::probabilistic::run(client_clone, i, requests).await,
+                Scenario::Probabilistic => {
+                    scenarios::probabilistic::run(client_clone, i, requests).await
+                }
                 Scenario::LuaStress => scenarios::lua_stress::run(client_clone, i, requests).await,
-                Scenario::WorkloadSkew => scenarios::workload_skew::run(client_clone, i, requests).await,
-                Scenario::Backpressure => scenarios::backpressure::run(client_clone, i, requests).await,
+                Scenario::WorkloadSkew => {
+                    scenarios::workload_skew::run(client_clone, i, requests).await
+                }
+                Scenario::Backpressure => {
+                    scenarios::backpressure::run(client_clone, i, requests).await
+                }
             }
         }));
     }
@@ -103,7 +118,10 @@ async fn main() -> anyhow::Result<()> {
     println!("✅ Total Ops (approx):    {}", total_ops);
     println!("⏱️  Duration:     {:.2}s", duration_secs);
     if duration_secs > 0.0 {
-        println!("🚀 Throughput:   {:.0} ops/sec", total_ops as f64 / duration_secs);
+        println!(
+            "🚀 Throughput:   {:.0} ops/sec",
+            total_ops as f64 / duration_secs
+        );
     } else {
         println!("🚀 Throughput:   N/A ops/sec");
     }
@@ -112,8 +130,14 @@ async fn main() -> anyhow::Result<()> {
         println!("\n📊 Latency Distribution (microseconds):");
         println!("   p50:   {}", total_stats.histogram.value_at_quantile(0.5));
         println!("   p90:   {}", total_stats.histogram.value_at_quantile(0.9));
-        println!("   p99:   {}", total_stats.histogram.value_at_quantile(0.99));
-        println!("   p99.9: {}", total_stats.histogram.value_at_quantile(0.999));
+        println!(
+            "   p99:   {}",
+            total_stats.histogram.value_at_quantile(0.99)
+        );
+        println!(
+            "   p99.9: {}",
+            total_stats.histogram.value_at_quantile(0.999)
+        );
         println!("   Max:   {}", total_stats.histogram.max());
     }
 

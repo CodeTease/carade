@@ -48,7 +48,6 @@ public class ReplicationManager {
     
     // Simplistic offset (needs proper implementation)
     public long getReplicationOffset() { 
-        // Móc vào Backlog để lấy offset toàn cục thực tế
         return WriteSequencer.getInstance().getBacklog().getGlobalOffset();
     }
     

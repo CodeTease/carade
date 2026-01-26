@@ -1,16 +1,16 @@
 use hdrhistogram::Histogram;
 
-pub mod basic_stress;
-pub mod feature_check;
-pub mod complex_structures;
-pub mod large_payload;
-pub mod pipeline;
-pub mod connection_churn;
-pub mod pubsub;
-pub mod probabilistic;
-pub mod lua_stress;
-pub mod workload_skew;
 pub mod backpressure;
+pub mod basic_stress;
+pub mod complex_structures;
+pub mod connection_churn;
+pub mod feature_check;
+pub mod large_payload;
+pub mod lua_stress;
+pub mod pipeline;
+pub mod probabilistic;
+pub mod pubsub;
+pub mod workload_skew;
 
 pub struct BenchStats {
     pub ops: usize,

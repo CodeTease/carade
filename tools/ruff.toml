@@ -1,0 +1,20 @@
+# ruff.toml — Ruff configuration file
+
+# Target Python version
+target-version = "py312"
+
+# Exclude certain directories/files from linting
+exclude = [
+    "__pycache__",
+    "venv",
+    ".venv",
+    ".ruff_cache",
+    "rust-benchmarks",
+    "scripts/legacy",
+]
+
+[lint]
+
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+]

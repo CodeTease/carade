@@ -71,10 +71,6 @@ public class ConfigCommand implements Command {
         try {
             switch (param) {
                 case "maxmemory":
-                    // Parse memory format logic duplicated from Config, 
-                    // or just assume bytes for runtime SET? Redis usually allows 10MB etc.
-                    // For simplicity, let's assume raw integer bytes for now or copy parsing logic.
-                    // Let's do simple long parse.
                     Carade.config.maxMemory = Long.parseLong(value); 
                     break;
                 case "maxmemory-policy":

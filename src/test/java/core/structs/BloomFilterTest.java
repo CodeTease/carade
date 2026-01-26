@@ -64,9 +64,6 @@ public class BloomFilterTest {
 
     @Test
     public void testFalsePositives() {
-        // Since we can't easily configure the BF params via BF.ADD (it uses defaults in current impl or maybe it reserves),
-        // let's just check that different items don't collide for a small set.
-        // The default implementation uses n=10000, p=0.01.
         
         BfAddCommand bfAdd = new BfAddCommand();
         BfExistsCommand bfExists = new BfExistsCommand();

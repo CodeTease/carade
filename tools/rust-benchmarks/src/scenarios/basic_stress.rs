@@ -1,6 +1,6 @@
+use crate::scenarios::BenchStats;
 use redis::AsyncCommands;
 use std::time::Instant;
-use crate::scenarios::BenchStats;
 
 pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::Result<BenchStats> {
     let mut con = client.get_multiplexed_async_connection().await?;

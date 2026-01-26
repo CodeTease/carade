@@ -59,10 +59,6 @@ public class NettyRespDecoderTest {
         // Garbage with newline to trigger processing
         channel.writeInbound(Unpooled.copiedBuffer("NOT_RESP_FORMAT\r\n", StandardCharsets.UTF_8));
         
-        // Logic says: if not '*', assume inline?
-        // Inline logic: split by space.
-        // "NOT_RESP_FORMAT" -> ["NOT_RESP_FORMAT"]
-        
         Object output = channel.readInbound();
         assertNotNull(output);
         List<byte[]> args = (List<byte[]>) output;

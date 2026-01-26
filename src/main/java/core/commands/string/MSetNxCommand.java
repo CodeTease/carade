@@ -16,16 +16,6 @@ public class MSetNxCommand implements Command {
             return;
         }
         Carade.performEvictionIfNeeded();
-
-        // Check existence (Read phase - can be done outside write lock if we accept race, 
-        // but for strict atomicity MSETNX check+set must be atomic. 
-        // However, standard Redis logic: "Atomic" means checking and setting happens together.
-        // So we should do it inside executeWrite to be safe? 
-        // But checking efficiently without lock is better. 
-        // Actually, if we want MSETNX to be truly atomic, we must do the check INSIDE the write lock 
-        // or hold a lock. executeWrite holds the lock.
-        
-        // However, passing a lambda to executeWrite that might fail (return 0) is fine.
         
         Object[] logArgs = new Object[args.size() - 1];
         for(int i=1; i<args.size(); i++) {

@@ -1,6 +1,6 @@
-use redis::AsyncCommands;
-use futures_util::StreamExt;
 use crate::scenarios::BenchStats;
+use futures_util::StreamExt;
+use redis::AsyncCommands;
 
 pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::Result<BenchStats> {
     let channel = "bench_pubsub";
@@ -20,15 +20,18 @@ pub async fn run(client: redis::Client, id: usize, requests: usize) -> anyhow::R
         let mut stream = pubsub.on_message();
         let mut received = 0;
         loop {
-             let msg_option = tokio::time::timeout(tokio::time::Duration::from_secs(3), stream.next()).await;
-             match msg_option {
-                 Ok(Some(_)) => {
-                     received += 1;
-                     if received >= requests { break; }
-                 }
-                 Ok(None) => break,
-                 Err(_) => break,
-             }
+            let msg_option =
+                tokio::time::timeout(tokio::time::Duration::from_secs(3), stream.next()).await;
+            match msg_option {
+                Ok(Some(_)) => {
+                    received += 1;
+                    if received >= requests {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
         }
         stats.ops = received;
     }

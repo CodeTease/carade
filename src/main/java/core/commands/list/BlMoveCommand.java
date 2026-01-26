@@ -82,13 +82,6 @@ public class BlMoveCommand implements Command {
                 // Default push to target is LPUSH (HEAD).
                 
                 boolean popFromLeft = whereFrom.equals("LEFT");
-                // If whereTo is RIGHT, we are in trouble with standard BlockingRequest if it only supports LPUSH.
-                // However, given the constraints, we will attempt to use it.
-                // If the user requires exact BLMOVE behavior for blocking, we would need to refactor Carade.java.
-                // For now, let's assume we can only support what BlockingRequest supports or we need to hack it.
-                // But wait, the original switch case also had this limitation? 
-                // "The logic in Carade.checkBlockers() actually performs the POP and PUSH if targetKey is set."
-                // I checked `BlockingRequest` constructor in `BrPopLPushCommand`.
                 
                 Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, popFromLeft, destKey, client.getDbIndex());
                 Carade.blockingRegistry.computeIfAbsent(source, x -> new ConcurrentLinkedQueue<>()).add(bReq);
