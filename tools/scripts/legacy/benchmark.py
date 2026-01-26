@@ -1,3 +1,9 @@
+# This file is the old benchmarking script for Carade
+# It had been deprecated, replace with Rust benchmark tool (see tools/rust-benchmarks)
+# because of Python GIL limitations affecting tests results
+# However, we store it here for reference and quick tests
+
+
 import socket
 import time
 import threading

@@ -1,0 +1,71 @@
+name: CI Chaos
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/chaos/**'
+      - 'src/**'
+      - '.github/workflows/chaos-tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tools/chaos/**'
+      - 'src/**'
+      - '.github/workflows/chaos-tests.yml'
+
+jobs:
+  chaos-test:
+    name: Run Chaos Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build Carade
+        run: mvn clean compile
+
+      - name: Start Carade Server
+        run: |
+          # Start in background, redirect logs
+          mvn exec:java > carade_chaos.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for Server
+        run: |
+          timeout 30s bash -c 'until nc -z localhost 63790; do sleep 1; done'
+          echo "Server is up!"
+
+      - name: Ping
+        run: python3 tools/ping.py
+
+      - name: Protocol Fuzzing
+        run: python3 tools/chaos/protocol_fuzz.py
+
+      - name: Concurrency Stress
+        run: python3 tools/chaos/concurrency_stress.py
+
+      - name: Resource & Network Stress
+        run: python3 tools/chaos/resource_net.py
+
+      - name: Show Server Logs (on failure)
+        if: failure()
+        run: cat carade_chaos.log
+
+      - name: Stop Server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then
+            kill $(cat server.pid) || true
+          fi

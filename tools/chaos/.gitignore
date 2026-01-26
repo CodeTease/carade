@@ -1,0 +1,3 @@
+# __pycache__ have been ignored in higher-level folders (specifically, the tools/ folder),
+# but we keep this file for reference 
+__pycache__/

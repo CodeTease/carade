@@ -26,6 +26,9 @@ jobs:
       - run: mvn clean compile
       - run: mvn test
       - name: Start Server
+        # Why are we removing *.aof files here?
+        # In this step, we removed `carade.aof` (created via tests), 
+        # which very likely will corrupt the server startup.
         run: |
           rm -rf *.aof 
           mvn exec:java > carade.log 2>&1 &

@@ -1,7 +1,7 @@
 import os
 import random
-import sys
 import argparse
+
 
 def sabotage_aof(data_dir):
     path = os.path.join(data_dir, "appendonly.aof")
@@ -20,8 +20,9 @@ def sabotage_aof(data_dir):
     with open(path, "rb+") as f:
         f.seek(-5, os.SEEK_END)
         f.truncate()
-    
+
     print("AOF Truncated. Start server to verify recovery.")
+
 
 def sabotage_rdb(data_dir):
     path = os.path.join(data_dir, "dump.rdb")
@@ -46,6 +47,7 @@ def sabotage_rdb(data_dir):
         f.write(corrupted)
         print(f"Flipped byte at position {pos}.")
 
+
 def simulate_disk_full(data_dir):
     print("Warning: This test attempts to create a large file 'disk_full_filler.dat'.")
     print("It respects available disk space but use with caution.")
@@ -67,21 +69,27 @@ def simulate_disk_full(data_dir):
         if os.path.exists(path):
             print(f"Created {path}. Delete it to free space.")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Chaos tools for Storage")
-    parser.add_argument("--dir", default=".", help="Directory containing .aof and .rdb files")
-    parser.add_argument("--action", choices=["aof-trunc", "rdb-flip", "disk-full"], required=True)
-    
+    parser.add_argument(
+        "--dir", default=".", help="Directory containing .aof and .rdb files"
+    )
+    parser.add_argument(
+        "--action", choices=["aof-trunc", "rdb-flip", "disk-full"], required=True
+    )
+
     args = parser.parse_args()
-    
+
     print("⚠️  Ensure Carade server is STOPPED before running storage sabotage! ⚠️")
-    
+
     if args.action == "aof-trunc":
         sabotage_aof(args.dir)
     elif args.action == "rdb-flip":
         sabotage_rdb(args.dir)
     elif args.action == "disk-full":
         simulate_disk_full(args.dir)
+
 
 if __name__ == "__main__":
     main()

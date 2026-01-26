@@ -70,7 +70,7 @@ def ping_server():
     conn = get_connection()
     if not conn[0]:
         print("❌ Cannot connect to Server. Is Carade running?")
-        return
+        return exit(1)
 
     s, f = conn
     print("Sending PING...", end=" ")
