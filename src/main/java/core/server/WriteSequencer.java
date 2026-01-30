@@ -36,6 +36,10 @@ public class WriteSequencer {
         return INSTANCE;
     }
 
+    public static synchronized void resetSingleton() {
+        INSTANCE = null;
+    }
+
     /**
      * Executes a write operation atomically.
      * @param dbOperation The lambda updating the RAM (HashMap)

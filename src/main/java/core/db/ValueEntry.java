@@ -17,18 +17,18 @@ public class ValueEntry implements Serializable {
         this.value = value;
         this.type = type;
         this.expireAt = expireAt;
-        this.lastAccessed = System.currentTimeMillis();
+        this.lastAccessed = core.utils.Time.now();
     }
     
     public void touch() {
-        this.lastAccessed = System.currentTimeMillis();
+        this.lastAccessed = core.utils.Time.now();
         if (this.frequency < Integer.MAX_VALUE) {
             this.frequency++;
         }
     }
     
     public boolean isExpired() {
-        return expireAt != -1 && System.currentTimeMillis() > expireAt;
+        return expireAt != -1 && core.utils.Time.now() > expireAt;
     }
     
     public boolean isExpired(long now) {

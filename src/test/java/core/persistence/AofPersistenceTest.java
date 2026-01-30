@@ -4,6 +4,7 @@ import core.Carade;
 import core.db.CaradeDatabase;
 import core.db.DataType;
 import core.db.ValueEntry;
+import core.server.WriteSequencer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,13 +23,17 @@ public class AofPersistenceTest {
     public void setup() throws IOException {
         aofFile = File.createTempFile("carade_test", ".aof");
         aofFile.deleteOnExit();
-        
-        Carade.db = CaradeDatabase.getInstance();
-        CaradeDatabase.getInstance().clearAll();
+
+        CaradeDatabase.resetSingleton();
+        WriteSequencer.resetSingleton();
         
         // Initialize custom logger for this test
         logger = new CommandLogger(aofFile);
         Carade.aofHandler = logger;
+
+        Carade.db = CaradeDatabase.getInstance();
+        CaradeDatabase.getInstance().clearAll();
+        Carade.resetAofClient();
     }
 
     @AfterEach

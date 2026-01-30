@@ -5,7 +5,6 @@ import core.commands.string.SetCommand;
 import core.commands.string.GetCommand;
 import core.db.CaradeDatabase;
 import core.network.ClientHandler;
-import core.protocol.Resp;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -73,14 +72,6 @@ public class TransactionTest {
         multi.execute(client, makeArgs("MULTI"));
         assertTrue(client.isInTransaction());
         assertEquals("OK", client.lastResponseString);
-
-        // SET k v (Queued)
-        // ClientHandler handles queueing if isInTransaction is true.
-        // But we are invoking command.execute directly?
-        // No, in real life, ClientHandler.channelRead calls handleCommand -> checks isInTransaction -> queues.
-        // Here we are unit testing commands.
-        // Commands don't queue themselves. ClientHandler does.
-        // So I must manually queue commands or simulate ClientHandler logic.
         
         // Simulating queuing manually since we are bypassing ClientHandler.channelRead
         List<byte[]> cmd1 = makeArgs("SET", "k", "v");
@@ -94,9 +85,6 @@ public class TransactionTest {
 
         assertFalse(client.isInTransaction());
         assertNotNull(client.lastResponseData);
-        // Result should be Array of [OK, v]
-        // Since we can't easily parse byte[] result without Decoder, we just assume success if no error.
-        // But we can check side effects.
         assertEquals("v", new String((byte[])CaradeDatabase.getInstance().get(0, "k").getValue()));
     }
 
@@ -129,11 +117,6 @@ public class TransactionTest {
         exec.execute(client, makeArgs("EXEC"));
 
         assertFalse(client.isInTransaction());
-        // Null bulk string indicates failure of exec due to watch
-        // My Mock captures the raw object passed to writeDirect.
-        // Resp.bulkString(null) or something similar.
-        // Actually EXEC returns (nil) which is BulkString null.
-        // Let's check ExecCommand implementation.
     }
 
     @Test
@@ -157,11 +140,6 @@ public class TransactionTest {
         
         // Verify results
         assertNotNull(client.lastResponseData);
-        // Should be Array of 3 items
-        // We can't easily parse List<Object> or byte[] unless we inspect closely or use RespParser.
-        // But we can check if keys were set.
-        // Redis Transactions: all commands are executed. If one fails, others still run.
-        
         assertEquals("v", new String((byte[])CaradeDatabase.getInstance().get(0, "k").getValue()));
         assertEquals("v2", new String((byte[])CaradeDatabase.getInstance().get(0, "k2").getValue()));
     }

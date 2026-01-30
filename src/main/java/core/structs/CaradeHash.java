@@ -29,8 +29,9 @@ public class CaradeHash implements Serializable {
     }
     
     public String remove(String field) {
+        String val = map.remove(field);
         expirations.remove(field);
-        return map.remove(field);
+        return val;
     }
     
     public int size() {
@@ -46,6 +47,10 @@ public class CaradeHash implements Serializable {
     public void setExpiry(String field, long timestamp) {
         if (map.containsKey(field)) {
             expirations.put(field, timestamp);
+            // Fix race condition: if removed concurrently
+            if (!map.containsKey(field)) {
+                expirations.remove(field);
+            }
         }
     }
     

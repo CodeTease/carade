@@ -4,9 +4,7 @@
 
 **Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Netty, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
 
-Part of the **CodeTease** Open-Source ecosystem.
-
-> Carade **is not** Production-Ready yet.
+A **CodeTease** project.
 
 ## Features
 
@@ -56,12 +54,12 @@ While Carade aims for high compatibility, the following features are currently *
 **Prerequisites:** JDK 21+ and Maven.
 
 1. **Build**
-```bash
+```shell
 mvn clean package
 ```
 
 2. **Run**
-```bash
+```shell
 # Run the jar
 java -jar target/carade-0.3.0.jar
 ```
@@ -72,7 +70,7 @@ The server listens on port **63790** (default).
 
 You can also run Carade using Docker:
 
-```bash
+```shell
 # Pull lastest version from GHCR
 docker pull ghcr.io/codetease/carade:latest
 

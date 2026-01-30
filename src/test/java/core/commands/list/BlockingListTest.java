@@ -1,8 +1,6 @@
 package core.commands.list;
 
 import core.Carade;
-import core.commands.list.BlPopCommand;
-import core.commands.list.RPushCommand;
 import core.db.CaradeDatabase;
 import core.network.ClientHandler;
 import org.junit.jupiter.api.AfterEach;
@@ -12,9 +10,6 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import static org.junit.jupiter.api.Assertions.*;
 
 public class BlockingListTest {
@@ -120,27 +115,5 @@ public class BlockingListTest {
         assertTrue(client.arraySent);
         assertEquals(1, client.lastArray.size());
         assertEquals("(nil)", client.lastArray.get(0));
-        
-        // Blocking request usually cleans itself up via future cancellation or logic in timeout?
-        // In BlPopCommand: 
-        // bReq.future.whenComplete((result, ex) -> { if (ex) sendNull ... })
-        // scheduleTimeout calls future.cancel(true) in ClientHandler.
-        // I need to check if my mock scheduleTimeout simulation accurately reflects ClientHandler's logic.
-        // My Mock scheduleTimeout just captures task.
-        // ClientHandler's scheduleTimeout wraps the task?
-        // No, ClientHandler.scheduleTimeout(Runnable, delay) just schedules it.
-        // But BlPopCommand calls `client.scheduleTimeout(bReq, delay)`.
-        // ClientHandler has a helper: 
-        // public void scheduleTimeout(Carade.BlockingRequest bReq, long delayMs) {
-        //     scheduleTimeout(() -> { if (!future.isDone()) { future.cancel(true); sendNull(); } }, delay);
-        // }
-        
-        // Ah! BlPopCommand calls the *helper* method which takes BlockingRequest.
-        // My Mock ClientHandler extends ClientHandler.
-        // If I override `scheduleTimeout(Runnable, long)`, I am overriding the low-level one.
-        // The helper method calls `scheduleTimeout(Runnable, long)`.
-        // So `capturedTimeoutTask` WILL contain the lambda `() -> { future.cancel; sendNull; }`.
-        
-        // So running it should trigger logic.
     }
 }

@@ -39,11 +39,6 @@ public class LRemCommand implements Command {
                             removed++;
                         }
                     } else if (toRemove > 0) {
-                        // Remove first 'count' occurrences from head
-                        // ConcurrentLinkedDeque.removeFirstOccurrence removes the first one.
-                        // But it iterates. Doing it repeatedly is O(N*count).
-                        // Better to iterate and remove. But ConcurrentLinkedDeque iterator remove is supported?
-                        // Yes.
                         Iterator<String> it = list.iterator();
                         while (it.hasNext() && removed < toRemove) {
                             if (it.next().equals(element)) {

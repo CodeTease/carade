@@ -66,18 +66,6 @@ public class ZLexCountCommand implements Command {
                 maxNode = new ZNode(0, max.substring(1));
             }
             
-            // For ZSet sorted set, we can rely on subSet ONLY IF score is same.
-            // If score is different, ZNode comparison uses score.
-            // So a node with score 1 is > node with score 0 regardless of string.
-            // If user uses ZLEXCOUNT on set with different scores, it might return 0 or garbage.
-            // Redis assumes score is same.
-            // But we must construct the boundary nodes with the SAME score as elements (0).
-            // We used 0 above.
-            
-            // However, - and + need special handling.
-            // If min is "-", we want from head.
-            // If max is "+", we want to tail.
-            
             NavigableSet<ZNode> subset;
             if (minNode.score == Double.NEGATIVE_INFINITY && maxNode.score == Double.POSITIVE_INFINITY) {
                 subset = zset.sorted;

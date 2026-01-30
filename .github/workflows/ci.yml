@@ -3,8 +3,14 @@ name: Carade CI
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
 
 jobs:
   test:
@@ -20,7 +26,11 @@ jobs:
       - run: mvn clean compile
       - run: mvn test
       - name: Start Server
+        # Why are we removing *.aof files here?
+        # In this step, we removed `carade.aof` (created via tests), 
+        # which very likely will corrupt the server startup.
         run: |
+          rm -rf *.aof 
           mvn exec:java > carade.log 2>&1 &
           echo $! > server.pid
       - name: Wait for Server
@@ -32,8 +42,16 @@ jobs:
           done
       - name: Run Tests
         run: |
-          python3 ping.py
-          python3 benchmark.py
+          python3 tools/ping.py
+      - name: Run Rust Benchmark
+        run: |
+          cd tools/rust-benchmarks
+          cargo run --release -- --clients 20 --requests 2000
+
+      - name: View Log on Failure
+        if: failure()
+        run: cat carade.log 
+
       - name: Cleanup
         if: always()
         run: |
@@ -60,8 +78,11 @@ jobs:
           python-version: '3.12'
       - name: Run Tests
         run: |
-          python3 ping.py
-          python3 benchmark.py
+          python3 tools/ping.py
+      - name: Run Rust Benchmark
+        run: |
+          cd tools/rust-benchmarks
+          cargo run --release -- --clients 20 --requests 2000
       - name: Logs on Failure
         if: failure()
         run: docker logs carade-server

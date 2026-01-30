@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -69,7 +70,12 @@ public class MigrateCommand implements Command {
             byte[] dumpPayload = baos.toByteArray();
             
             // Connect and Send
-            try (Socket socket = new Socket(host, port)) {
+            InetAddress addr = InetAddress.getByName(host);
+            if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isSiteLocalAddress() || addr.isMulticastAddress()) {
+                 throw new RuntimeException("Security: Destination address is not allowed (private/internal network).");
+            }
+
+            try (Socket socket = new Socket(addr, port)) {
                 socket.setSoTimeout(timeout);
                 OutputStream out = socket.getOutputStream();
                 InputStream in = socket.getInputStream();

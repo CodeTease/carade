@@ -35,7 +35,7 @@ import core.utils.Log;
 
 /**
  * Project: Carade
- * Version: 0.3.2
+ * Version: 0.3.3
  * Status: Stable idk / Probably production / Chaos / Forever
  * Author: CodeTease 
  */
@@ -237,15 +237,18 @@ public class Carade {
                 "/ /___/ /_/ / /  / /_/ / /_/ /  __/\n" +
                 "\\____/\\__,_/_/   \\__,_/\\__,_/\\___/ \n" +
                 "                                   \n" +
-                " :: Carade ::       (v0.3.2) \n" +
+                " :: Carade ::       (v0.3.3) \n" +
                 " :: Engine ::       Java \n" +
                 " :: Author ::       CodeTease \n");
     }
 
     private static final ClientHandler aofClient = new ClientHandler();
+    static {
+        aofClient.setDisableAofLogging(true);
+    }
 
     public static void main(String[] args) throws Exception {
-        Log.info("\n--- CARADE v0.3.2 ---\n");
+        Log.info("\n--- CARADE v0.3.3 ---\n");
 
         // Load Config
         config = Config.load("carade.conf");
@@ -421,6 +424,13 @@ public class Carade {
         } catch (Exception e) {
             Log.error("⚠️ Error executing AOF command: " + cmdName + " - " + e.getMessage());
         }
+    }
+
+    public static void resetAofClient() {
+        aofClient.dbIndex = 0;
+        aofClient.setInTransaction(false);
+        aofClient.clearTransactionQueue();
+        aofClient.setCurrentUser(null);
     }
     
     private static void cleanupExpiredCursors() {

@@ -26,13 +26,6 @@ public class RespParser {
             case '+': // Simple String
                 return new SimpleString(readLine(in));
             case '-': // Error
-                // Redis errors are usually returned as a specific type, but for Lua we might want a Table or just String.
-                // Or maybe a wrapper class.
-                // For now, let's return a special "Error" object or just the string if simpler?
-                // The Lua binding will need to know it's an error to use pcall correctly.
-                // Let's return a RuntimeException wrapping the message?
-                // No, we should return a value that can be inspected.
-                // Let's return a helper wrapper.
                 return new RespError(readLine(in));
             case ':': // Integer
                 return Long.parseLong(readLine(in));

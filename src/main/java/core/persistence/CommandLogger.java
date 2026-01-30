@@ -197,15 +197,22 @@ public class CommandLogger {
         if (!f.exists()) return;
         
         System.out.println("📂 Replaying AOF...");
-        try (FileInputStream fis = new FileInputStream(f)) {
+        try (InputStream fis = new BufferedInputStream(new FileInputStream(f), 1024 * 1024)) { // 1MB Buffer
+            long count = 0;
+            long start = System.currentTimeMillis();
             while (true) {
                 Resp.Request req = Resp.parse(fis);
                 if (req == null) break;
                 
                 if (!req.args.isEmpty()) {
                     commandExecutor.accept(req.args);
+                    count++;
+                    if (count % 100000 == 0) {
+                        System.out.println("   Loaded " + count + " commands... (" + (System.currentTimeMillis() - start) + "ms)");
+                    }
                 }
             }
+            System.out.println("✅ Replay finished. " + count + " commands processed in " + (System.currentTimeMillis() - start) + "ms.");
         } catch (IOException e) {
             System.err.println("⚠️ Error replaying AOF: " + e.getMessage());
         }

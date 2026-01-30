@@ -26,12 +26,6 @@ public class PfMergeCommand implements Command {
             ValueEntry destVal = Carade.db.get(client.getDbIndex(), destKey);
             if (destVal != null) {
                 if (destVal.type != DataType.HYPERLOGLOG) {
-                    // In Redis, if dest exists and is not HLL, it returns error?
-                    // Redis says: "The destination variable is created if it does not exist."
-                    // If it exists, it is used as starting point. 
-                    // But if it is wrong type? 
-                    // "If the destination variable exists, it is treated as one of the source sets and its content is included in the result."
-                    // Error if wrong type.
                     throw new RuntimeException("WRONGTYPE Key is not a valid HyperLogLog string value.");
                 }
                 merged.merge((HyperLogLog) destVal.getValue());

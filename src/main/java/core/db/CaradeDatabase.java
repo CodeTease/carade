@@ -23,6 +23,10 @@ public class CaradeDatabase {
         return INSTANCE;
     }
 
+    public static synchronized void resetSingleton() {
+        INSTANCE = null;
+    }
+
     private final Config config;
     private final CommandLogger aofHandler;
     private final AtomicInteger writeCounter = new AtomicInteger(0);
@@ -49,8 +53,9 @@ public class CaradeDatabase {
         ValueEntry v = db.get(key);
         if (v != null) {
             if (v.isExpired()) {
-                remove(dbIndex, key); 
-                notify(dbIndex, key, "expired");
+                if (remove(dbIndex, key) != null) {
+                    notify(dbIndex, key, "expired");
+                }
                 Carade.keyspaceMisses.incrementAndGet();
                 return null;
             }
@@ -199,7 +204,7 @@ public class CaradeDatabase {
     }
 
     public void cleanup() {
-         long now = System.currentTimeMillis();
+         long now = core.utils.Time.now();
          for(int i=0; i<DB_COUNT; i++) {
              Iterator<Map.Entry<String, ValueEntry>> it = databases[i].entrySet().iterator();
              while (it.hasNext()) {

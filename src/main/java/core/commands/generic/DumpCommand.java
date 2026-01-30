@@ -28,21 +28,6 @@ public class DumpCommand implements Command {
         }
 
         try {
-            // We use RdbEncoder to serialize just this key-value.
-            // But RdbEncoder serializes entire DB structure usually.
-            // We need a fragment serializer. 
-            // RdbEncoder.encode writes header/etc.
-            // We need a way to invoke internal write logic for a specific type.
-            // Since RdbEncoder has private methods, we might need to expose them or duplicate logic.
-            // Let's modify RdbEncoder to expose `encodeValue`?
-            // Or create a mini encoder here.
-            
-            // Re-implementing simplified DUMP format (Redis RDB version 9 compatible)
-            // Or just use Java Serialization? No, DUMP is supposed to be opaque but RDB format usually.
-            
-            // Let's rely on a helper in RdbEncoder if possible, but I cannot change it easily now without context.
-            // I will implement a minimal RDB serialization for the value type here.
-            // This duplicates logic from RdbEncoder but safe for a single command.
             
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             DataOutputStream dos = new DataOutputStream(baos);

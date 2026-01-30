@@ -25,17 +25,8 @@ public class ReplicationBacklog {
         for (byte b : data) {
             buffer[writeIndex] = b;
             writeIndex = (writeIndex + 1) % size;
-            
-            // If we wrapped around and overwrote old data, the start offset moves forward
-            // (Actually, start offset is conceptually moving, but easier to calc:
-            // globalOffset always increases. valid range is [globalOffset - size, globalOffset])
         }
         globalOffset.addAndGet(data.length);
-        
-        // Update bufferStartOffset logic if needed?
-        // Actually, the simplest way is:
-        // Current global offset is X.
-        // Valid range is [max(0, X - size), X].
     }
 
     public long getGlobalOffset() {

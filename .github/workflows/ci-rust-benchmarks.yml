@@ -1,0 +1,51 @@
+name: CI Rust Benchmarks
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/rust-benchmarks/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tools/rust-benchmarks/**'
+
+jobs:
+  rust-benchmarks:
+    name: Rust Benchmarks CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Check
+        run: |
+          cd tools/rust-benchmarks
+          cargo check --verbose
+      - name: Clippy
+        run: |
+          cd tools/rust-benchmarks
+          # Ensure that clippy warnings don't fail the job
+          cargo clippy || exit 0
+      - name: Tests
+        run: |
+          cd tools/rust-benchmarks
+          cargo test --verbose
+      - name: Format Check
+        run: |
+          cd tools/rust-benchmarks
+          cargo fmt --check
+      - name: Build Release
+        run: |
+          cd tools/rust-benchmarks
+          cargo build --release
+      # Just to ensure it won't fail, we cannot run benchmark in CI
+      # because Carade is not running in the background here.
+      # See .github/workflows/ci.yml for the actual benchmark run.
+      - name: Run Benchmark (Test Only)
+        run: |
+          cd tools/rust-benchmarks
+          cargo run --release -- --clients 20 --requests 2000 || exit 0

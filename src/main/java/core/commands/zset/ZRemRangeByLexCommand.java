@@ -82,11 +82,6 @@ public class ZRemRangeByLexCommand implements Command {
                 }
             }
             
-            // To remove, we need to collect them first to avoid concurrent modification?
-            // CaradeZSet.sorted is ConcurrentSkipListSet. But we also need to remove from scores map.
-            // Iterating and removing is safe in ConcurrentSkipListSet, but not atomic for map?
-            // We should collect keys to remove.
-            
             List<String> toRemove = new ArrayList<>();
             for (ZNode node : subset) {
                 toRemove.add(node.member);

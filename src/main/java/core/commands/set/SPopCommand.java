@@ -45,28 +45,12 @@ public class SPopCommand implements Command {
                 int size = set.size();
                 int todo = finalCount;
                 if (todo > size) todo = size;
-
-                // Naive random removal: iterate and remove first 'todo' elements?
-                // No, that's not random.
-                // We need to pick random elements.
-                
-                // If we need to remove random items, we can iterate and pick with probability?
-                // Or convert to array.
                 
                 Object[] arr = set.toArray();
-                // Shuffle or pick random indices.
-                // Since we are removing, we can pick random index, swap with end (if array list), but this is an array copy.
-                
-                // Let's pick 'todo' random indices.
-                // Since we have the array copy now, we can pick from it.
-                // And then remove from the set.
                 
                 for (int i = 0; i < todo; i++) {
                     // Pick random from remaining
                     int idx = ThreadLocalRandom.current().nextInt(arr.length - i);
-                    // Swap to end to avoid picking again? No, simpler:
-                    // Just swap the picked one to the end (or start) of the 'active' range.
-                    // Actually, we can just swap element at 'idx' with element at 'arr.length - 1 - i'.
                     
                     Object picked = arr[idx];
                     popped.add((String) picked);

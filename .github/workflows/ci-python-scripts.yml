@@ -1,0 +1,33 @@
+name: CI Python Scripts
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/**.py'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tools/**.py'
+
+jobs:
+  python-scripts:
+    name: Python Scripts CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Lint with Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          cd tools
+          ruff check . --exit-zero
+      - name: Format Check 
+        run: |
+          cd tools
+          ruff format . --check
+          

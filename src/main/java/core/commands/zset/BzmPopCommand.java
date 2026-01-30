@@ -106,17 +106,6 @@ public class BzmPopCommand implements Command {
             
             // 2. Block
             // Note: Current BlockingRequest only supports returning single [key, member, score] tuple in checkBlockers logic for ZSET
-            // But BZMPOP might need count.
-            // Existing checkBlockers implementation:
-            // if (v.type == DataType.ZSET) { ... req.isLeft ? zset.popMin(1) ... }
-            // So currently it only pops 1 element.
-            // Changing checkBlockers to support count is risky/complex given current scope (memory only says "generic DataType checking").
-            // For BZMPOP, if count > 1, we might only get 1 element if we use existing blocking logic.
-            // However, Redis BZMPOP returns "up to count". 1 is valid.
-            // So relying on existing logic which pops 1 is acceptable for a "first cut".
-            // Logic: popMin(1) returns List<ZNode>. checkBlockers completes future with [key, member, score].
-            // We need to adapt the result format.
-            // BZMPOP expects [key, [[member, score], ...]]
             
             Carade.BlockingRequest bReq = new Carade.BlockingRequest(client, isMin, client.getDbIndex(), DataType.ZSET);
             for (String k : keys) {

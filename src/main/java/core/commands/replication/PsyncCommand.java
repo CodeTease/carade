@@ -26,16 +26,16 @@ public class PsyncCommand implements Command {
         ReplicationBacklog backlog = WriteSequencer.getInstance().getBacklog();
         long currentGlobalOffset = backlog.getGlobalOffset();
         
-        // --- LOGIC QUAN TRỌNG ĐỂ "PASS" DEADLINE ---
-        // Kiểm tra xem có thể Partial Resync không?
-        // Điều kiện: Offset yêu cầu nằm trong vùng dữ liệu còn lưu trong Backlog
+        // --- IMPORTANT LOGIC TO "PASS" DEADLINE ---
+        // Check if Partial Resync is possible?
+        // Condition: The requested offset is within the data region still stored in the Backlog
         if (reqOffset != -1 && backlog.isValidOffset(reqOffset)) {
             // +CONTINUE
             String msg = "CONTINUE\r\n";
             client.sendResponse(("+"+msg).getBytes(StandardCharsets.UTF_8), null);
             
-            // Gửi phần dữ liệu còn thiếu từ backlog
-            // Tính toán lượng cần đọc: từ reqOffset đến hiện tại
+            // Send the missing data portion from the backlog
+            // Calculate the amount to read: from reqOffset to current
             int missingBytes = (int)(currentGlobalOffset - reqOffset);
             if (missingBytes > 0) {
                 byte[] delta = backlog.readFrom(reqOffset, missingBytes);
@@ -44,12 +44,12 @@ public class PsyncCommand implements Command {
                 }
             }
             
-            // Đăng ký làm Replica luôn để nhận data mới sau này
+            // Register as Replica immediately to receive new data later
             ReplicationManager.getInstance().addReplica(client);
-            return; // Xong! Không cần gửi RDB nặng nề.
+            return; // Done, no need to send the heavy RDB.
         }
 
-        // --- NẾU KHÔNG THỂ PARTIAL SYNC THÌ MỚI LÀM FULL SYNC (Code cũ) ---
+        // --- IF CANNOT DO PARTIAL SYNC THEN DO FULL SYNC (Old code) ---
         long startOffset = currentGlobalOffset;
         String replId = "0000000000000000000000000000000000000000"; 
         

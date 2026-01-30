@@ -50,11 +50,8 @@ public class ProtocolFuzzingTest {
         assertNull(msg, "Should not produce message on incomplete delimiter");
         
         // Finish it (assuming flexible decoder or strict)
-        // Note: The decoder implementation I read uses findEndOfLine which handles \n and optional \r
-        // But if I sent only \r without \n, it returns -1, so it waits.
         channel.writeInbound(Unpooled.copiedBuffer("\n", StandardCharsets.UTF_8)); // complete the *1 line
         
-        // The decoder will see "*1\r$4\rPING\r\n" as one line for the count, which fails Integer.parseInt
         // Expect connection close due to invalid protocol
         assertFalse(channel.isOpen(), "Channel should close on invalid protocol");
     }
