@@ -4,9 +4,7 @@
 
 **Carade** is a high-performance, in-memory key-value store & message broker built with pure Java. Now runs on Netty, supports **RESP (Redis Serialization Protocol)**, extensive Data Structures, and robust Security.
 
-Part of the **CodeTease** Open-Source ecosystem.
-
-> Carade **is not** Production-Ready yet.
+A **CodeTease** project.
 
 ## Features
 

@@ -37,3 +37,8 @@ dependency-reduced-pom.xml
 # Vegh files (CodeTease's Snapshot tool)
 *.vegh 
 .veghcache
+
+# Pavidi (P) (CodeTease's Project Manager)
+# .p (Includes caches)
+# Pavidi is in development and not yet released,
+# so this is commented out for now.
