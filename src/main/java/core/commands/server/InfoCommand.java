@@ -11,7 +11,7 @@ public class InfoCommand implements Command {
     public void execute(ClientHandler client, List<byte[]> args) {
         StringBuilder info = new StringBuilder();
         info.append("# Server\n");
-        info.append("carade_version:0.3.3\n");
+        info.append("carade_version:0.3.4\n");
         info.append("tcp_port:").append(Carade.config.port).append("\n");
         info.append("uptime_in_seconds:").append(ManagementFactory.getRuntimeMXBean().getUptime() / 1000).append("\n");
         info.append("\n# Clients\n");
