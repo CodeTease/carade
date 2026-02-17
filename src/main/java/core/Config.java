@@ -10,6 +10,7 @@ public class Config {
     public static final int PORT = 63790; 
     public static final String MAXMEMORY = "0"; 
 
+    public String version = "0.3.4";
     public int port = 63790;
     public String password = "teasertopsecret";
     public long maxMemory = 268435456; // 256MB default
@@ -67,8 +68,13 @@ public class Config {
             
         } catch (Exception e) {
             System.out.println("⚠️ Failed to load config as YAML (" + e.getMessage() + "). Attempting legacy parse...");
-            return loadLegacy(f, config);
+            config = loadLegacy(f, config);
         }
+
+        if (System.getenv("CARADE_VERSION") != null) {
+            config.version = System.getenv("CARADE_VERSION");
+        }
+
         return config;
     }
     
