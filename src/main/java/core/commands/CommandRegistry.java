@@ -218,7 +218,7 @@ public class CommandRegistry {
         register("RESET", new ResetCommand());
         register("MEMORY", new MemoryCommand());
         register("SLOWLOG", new SlowlogCommand());
-        register("INFO", new InfoCommand());
+        register("INFO", new InfoCommand(new core.CaradeServerContext()));
         register("DBSIZE", new DbSizeCommand());
         register("FLUSHALL", new FlushAllCommand());
         register("FLUSHDB", new FlushDbCommand());
