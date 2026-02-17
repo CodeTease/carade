@@ -42,7 +42,7 @@ A **CodeTease** project.
 
 ## Roadmap & Missing Features
 
-While Carade aims for high compatibility, the following features are currently **missing** in v0.3.0 compared to standard Redis:
+While Carade aims for high compatibility, the following features are currently **missing** in v0.3.0+ compared to standard Redis:
 
 * **Redis Cluster:** No native clustering or sharding support.
 * **Streams:** No support for Stream data type (`XADD`, `XREAD`, etc.).
@@ -61,7 +61,7 @@ mvn clean package
 2. **Run**
 ```shell
 # Run the jar
-java -jar target/carade-0.3.0.jar
+java -jar target/carade-0.3.4.jar
 ```
 
 The server listens on port **63790** (default).
