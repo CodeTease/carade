@@ -72,4 +72,74 @@ else:
     print("Session expired, please login again.")
 ```
 
+## Examples: Conditional Increment (Rate Limiting)
+
+Sometimes you need to atomically increment a counter but ensure it doesn't exceed a specific threshold. This is common in rate-limiting scenarios. We can achieve this reliably on the server-side using Carade's Lua scripting capability with `EVAL`.
+
+### Lua Script Implementation
+
+This script takes the counter key, the maximum threshold, and the expiration time as arguments. It atomically increments the counter and returns the new value. If the threshold would be exceeded, it returns `-1` without incrementing.
+
+```lua
+-- KEYS[1]: Counter key
+-- ARGV[1]: Threshold limit
+-- ARGV[2]: Expiration in seconds
+local current = tonumber(redis.call('GET', KEYS[1]) or "0")
+local limit = tonumber(ARGV[1])
+
+if current >= limit then
+    return -1 -- Rate limit exceeded
+end
+
+local new_val = redis.call('INCR', KEYS[1])
+if new_val == 1 then
+    -- Set expiration only on the first increment
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+
+return new_val
+```
+
+### Execution Example (Python redis-py)
+
+```python
+import redis
+
+r = redis.Redis(host='localhost', port=63790, password='teasertopsecret')
+
+# The lua script as a string
+lua_script = """
+local current = tonumber(redis.call('GET', KEYS[1]) or "0")
+local limit = tonumber(ARGV[1])
+if current >= limit then
+    return -1
+end
+local new_val = redis.call('INCR', KEYS[1])
+if new_val == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return new_val
+"""
+
+# Register the script once with Carade
+rate_limit_script = r.register_script(lua_script)
+
+def check_rate_limit(user_id, limit=5, window_seconds=60):
+    key = f"rate_limit:{user_id}"
+    
+    # Execute the atomic operation
+    result = rate_limit_script(keys=[key], args=[limit, window_seconds])
+    
+    if result == -1:
+        print(f"User {user_id}: Rate limit exceeded! Please wait.")
+        return False
+    else:
+        print(f"User {user_id}: Request {result}/{limit} allowed.")
+        return True
+
+# Simulate multiple requests
+for i in range(7):
+    check_rate_limit("user456")
+```
+
 See the full list in [Compatibility Matrix](compatibility.md).
